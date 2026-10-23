@@ -1,0 +1,16 @@
+{
+  "hex": "MDK\\Objects\\Project_Template.hex",
+  "sha256": "0aec6e767735fc98ee93d4c3660a04348f05a77c72065a51fb233e61fd6a1ae5",
+  "flash_data_bytes": 41895,
+  "first_address": "FF0000",
+  "last_address": "FFA3A6",
+  "reserved_parameter_cpu_addresses": [
+    "FE0000-FE01FF",
+    "FE0200-FE03FF"
+  ],
+  "eeprom_iap_slots": [
+    "000000",
+    "000200"
+  ],
+  "isp_eeprom_minimum_bytes": 1024
+}

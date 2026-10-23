@@ -1,0 +1,12 @@
+*.exe
+*.obj
+*.crf
+*.lst
+*.map
+*.uvgui.*
+*.uvguix.*
+*.uvopt
+*.uvoptx
+*.bak
+*.zip
+**/__pycache__/
