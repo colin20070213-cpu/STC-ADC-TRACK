@@ -62,9 +62,9 @@
 #define TRACK_ADC_RAIL_FRAMES   ((TRACK_ADC_RAIL_CONFIRM_MS + TRACK_PERIOD_MS - 1U) / TRACK_PERIOD_MS)
 #define TRACK_ADC_RAIL         4090U  /* 12 位 ADC 高端饱和判据。 */
 /* 舵机三值保留旧界面标度：1 单位=2us 脉宽；换频率时三值不变。
- * 型号未确认前维持 50Hz；确定厂家允许频率后再改本宏，不能按机械速度猜测。 */
+ * 用户已确认 SPT5410LV，采用产品资料标称的 330Hz 信号频率。 */
 #ifndef TRACK_SERVO_FREQUENCY
-#define TRACK_SERVO_FREQUENCY  50UL
+#define TRACK_SERVO_FREQUENCY  330UL
 #endif
 #define TRACK_SERVO_UNIT_US    2UL
 #define TRACK_SERVO_ABS_MIN    600    /* 绝对调试边界，还需服从实际机械限制。 */

@@ -30,7 +30,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Application test compilation failed' }
     & '.\MDK\test_app.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Application tests failed' }
-    foreach ($servoHz in @(50,250)) {
+    foreach ($servoHz in @(50,250,330)) {
         & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-DTRACK_HOST_TEST' "-DTRACK_SERVO_FREQUENCY=$servoHz" '-IUSER/inc' '-Itests' 'tests/test_hw.c' 'USER/src/track_hw.c' '-o' "MDK/test_hw_$servoHz.exe"
         if ($LASTEXITCODE -ne 0) { throw 'Hardware layer test compilation failed' }
         & ".\MDK\test_hw_$servoHz.exe"

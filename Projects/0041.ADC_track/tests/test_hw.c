@@ -10,12 +10,18 @@ uint8_t PWMA_CCR1H,PWMA_CCR1L,PWMA_CCR2H,PWMA_CCR2L;
 uint8_t PWMA_CCR3H,PWMA_CCR3L,PWMA_CCR4H,PWMA_CCR4L,PWMB_CCR1H,PWMB_CCR1L;
 uint8_t ADC_CONTR,ADC_RES,ADC_RESL,WDT_CONTR,SBUF;
 static uint32_t configured_baud;
+static uint32_t configured_servo_hz;
+static uint32_t servo_divisor;
 void GPIO_Init(uint8_t p,uint8_t i,uint8_t m){(void)p;(void)i;(void)m;}
 void GPIO_PinPullConfig(uint8_t p,uint8_t i,uint8_t m){(void)p;(void)i;(void)m;}
 void PWM_Init(uint8_t pin,uint32_t freq,uint32_t duty)
 {
-    uint16_t period=freq==50?60321:3316;(void)duty;
-    if(pin==PWMB_CH1_P74){PWMB_ARRH=period>>8;PWMB_ARRL=(uint8_t)period;}
+    uint32_t divider=(FOSC/freq)>>16;
+    uint16_t period=(uint16_t)((FOSC/freq)/(divider+1)-1);(void)duty;
+    if(pin==PWMB_CH1_P74){
+        configured_servo_hz=freq;servo_divisor=divider+1;
+        PWMB_ARRH=period>>8;PWMB_ARRL=(uint8_t)period;
+    }
     else {PWMA_ARRH=period>>8;PWMA_ARRL=(uint8_t)period;}
 }
 void ADC_Init(uint8_t pin,uint8_t speed){(void)pin;(void)speed;}
@@ -43,6 +49,27 @@ static unsigned finish_scan(void)
 }
 static void tick(unsigned ms){while(ms--){TrackHW_TickISR();finish_scan();}}
 static uint16_t word(uint8_t h,uint8_t l){return ((uint16_t)h<<8)|l;}
+/** @brief 按时钟和预分频独立换算实际高电平时长，检查全部允许舵机值。 */
+static void servo_pulse_tests(void)
+{
+    uint16_t command;
+    uint64_t measured_ns, expected_ns;
+
+    assert(configured_servo_hz==TRACK_SERVO_FREQUENCY);
+    TrackHW_Arm(1);
+    for(command=TRACK_SERVO_ABS_MIN;command<=TRACK_SERVO_ABS_MAX;command++)
+    {
+        TrackHW_Set(command,0,0,0);
+        assert(PWMB_ENO&1);
+        measured_ns=(uint64_t)word(PWMB_CCR1H,PWMB_CCR1L)*servo_divisor*1000000000ULL/FOSC;
+        expected_ns=(uint64_t)command*2000ULL;
+        assert(measured_ns<=expected_ns+2000ULL && measured_ns+2000ULL>=expected_ns);
+    }
+    TrackHW_Arm(0);
+    printf("PASS: servo %luHz, all 600..900 commands retain 2us/unit pulse width within 2us quantization\n",
+           (unsigned long)configured_servo_hz);
+}
+
 int main(void)
 {
     uint16_t values[4];unsigned n;char chunk[101];
@@ -60,6 +87,7 @@ int main(void)
     TrackHW_TickISR();
     assert(TrackHW_Sample(values) && values[0]==1002);
     assert(finish_scan()==6U*TRACK_SENSOR_COUNT && track_adc_frames==101);
+    servo_pulse_tests();
     TrackHW_Set(750,1000,1000,1);assert(!(PWMA_ENO&0x55));
     TrackHW_Arm(1);TrackHW_Set(750,1000,1000,0);
     assert(!(PWMA_ENO&0x55) && (PWMB_ENO&1));
