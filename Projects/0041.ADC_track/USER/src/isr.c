@@ -36,7 +36,7 @@
 
 #include "track_hw.h"
 
-/** @brief 1ms 时基：只处理计时、按键和截止保护。 */
+/** @brief 1ms 时基：处理计时、按键、截止保护，并触发一帧非阻塞 ADC 扫描。 */
 void TM0_Isr(void) interrupt 1
 {
     TF0 = 0;
@@ -56,4 +56,10 @@ void UART1_Isr(void) interrupt 4
         ignored = SBUF;
         RI = 0;
     }
+}
+
+/** @brief ADC 中断号 5：每次读回一个转换值并启动扫描中的下一次转换。 */
+void ADC_Isr(void) interrupt 5
+{
+    TrackHW_AdcISR();
 }

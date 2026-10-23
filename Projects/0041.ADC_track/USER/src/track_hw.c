@@ -21,6 +21,25 @@ volatile uint8_t track_guard_age;
 volatile uint8_t track_guard_trip;
 volatile uint8_t track_key_events;
 volatile uint16_t track_tx_dropped;
+volatile uint16_t track_adc_frames;   /**< 完成的整帧数量，允许自然回绕。 */
+volatile uint16_t track_adc_overruns; /**< 扫描跨过下一次 1ms 触发的累计次数。 */
+
+/* ADC ISR 只做有界的 16 位累加/比较，除法留在前台，避免打断数学库。 */
+static volatile uint8_t adc_enabled;
+static volatile uint8_t adc_running;
+static volatile uint8_t adc_fault;
+static volatile uint8_t adc_scan_age;
+static volatile uint8_t adc_frame_valid;
+static volatile uint8_t adc_published_bank;
+static volatile uint32_t adc_started_ms;
+static volatile uint32_t adc_frame_ms;
+static volatile uint16_t adc_trim_sum[2][TRACK_SENSOR_MAX];
+static uint8_t adc_write_bank;
+static uint8_t adc_channel;
+static uint8_t adc_sample_index;
+static uint16_t adc_total;
+static uint16_t adc_minimum;
+static uint16_t adc_maximum;
 
 static volatile uint16_t tx_head;
 static volatile uint16_t tx_tail;
@@ -34,10 +53,11 @@ static uint16_t servo_period;
 static uint8_t motor_left_reverse = TRACK_LEFT_REVERSE;
 static uint8_t motor_right_reverse = TRACK_RIGHT_REVERSE;
 
-/* 通道顺序：左 P13、右 P01、预留左 P16、预留右 P05。未接线不要启用。 */
+/* 通道顺序 L、R、LM、RM；中间两路引脚从配置宏读取。 */
 static const ADC_PIN_ENUM sensor_pins[TRACK_SENSOR_MAX] =
 {
-    ADC_P13, ADC_P01, ADC_P16, ADC_P05
+    TRACK_ADC_LEFT_PIN, TRACK_ADC_RIGHT_PIN,
+    TRACK_ADC_MIDDLE_LEFT_PIN, TRACK_ADC_MIDDLE_RIGHT_PIN
 };
 
 void TrackHW_Stop(void)
@@ -77,6 +97,100 @@ uint8_t TrackHW_SetMotorDirections(uint8_t left_reverse, uint8_t right_reverse)
     return 1;
 }
 
+/** @brief TIM0 启动一帧；忙时不重入，不等待 ADC 转换完成。 */
+static void adc_start_frame(void)
+{
+    if (!adc_enabled)
+    {
+        return;
+    }
+    if (adc_running)
+    {
+        if (track_adc_overruns != 65535U)
+        {
+            ++track_adc_overruns;
+        }
+        if (adc_scan_age < 255U)
+        {
+            ++adc_scan_age;
+        }
+        if (adc_scan_age >= TRACK_ADC_STALE_MS)
+        {
+            adc_fault = 1;
+            if (track_guard_armed)
+            {
+                TrackHW_Stop();
+            }
+        }
+        return;
+    }
+    adc_running = 1;
+    adc_scan_age = 0;
+    adc_started_ms = track_milliseconds;
+    adc_write_bank = adc_published_bank ^ 1U;
+    adc_channel = 0;
+    adc_sample_index = 0;
+    adc_total = 0;
+    adc_minimum = 4095;
+    adc_maximum = 0;
+    ADC_CONTR = 0xC0 | sensor_pins[0];
+}
+
+/** @brief 每次转换完成推进一格；每通道首读丢弃，再对 5 次有效读数去极值。 */
+void TrackHW_AdcISR(void)
+{
+    uint16_t value;
+
+    ADC_CONTR &= ~0x20;
+    if (!adc_running)
+    {
+        return;
+    }
+    value = ((uint16_t)ADC_RES << 8) | ADC_RESL;
+    if (value > 4095U)
+    {
+        adc_fault = 1;
+        adc_running = 0;
+        TrackHW_Stop();
+        return;
+    }
+    if (adc_sample_index != 0)
+    {
+        adc_total += value; /* 五次最大和为 20475，16 位足够。 */
+        if (value < adc_minimum)
+        {
+            adc_minimum = value;
+        }
+        if (value > adc_maximum)
+        {
+            adc_maximum = value;
+        }
+    }
+    ++adc_sample_index;
+    if (adc_sample_index == 6)
+    {
+        adc_trim_sum[adc_write_bank][adc_channel] = adc_total - adc_minimum - adc_maximum;
+        ++adc_channel;
+        if (adc_channel == TRACK_SENSOR_COUNT)
+        {
+            if (adc_scan_age < TRACK_ADC_STALE_MS)
+            {
+                adc_frame_ms = adc_started_ms;
+                adc_published_bank = adc_write_bank;
+                adc_frame_valid = 1;
+                ++track_adc_frames;
+            }
+            adc_running = 0;
+            return;
+        }
+        adc_sample_index = 0;
+        adc_total = 0;
+        adc_minimum = 4095;
+        adc_maximum = 0;
+    }
+    ADC_CONTR = 0xC0 | sensor_pins[adc_channel];
+}
+
 void TrackHW_TickISR(void)
 {
     uint8_t key_index;
@@ -89,6 +203,7 @@ void TrackHW_TickISR(void)
         track_guard_trip = 1;
         TrackHW_Stop();
     }
+    adc_start_frame();
     pressed = (!P42 ? KEY_UP_EVENT : 0) | (!P46 ? KEY_DOWN_EVENT : 0) |
               (!P45 ? KEY_LEFT_EVENT : 0) | (!P41 ? KEY_RIGHT_EVENT : 0) |
               (!P27 ? KEY_OK_EVENT : 0);
@@ -162,6 +277,14 @@ void TrackHW_Init(void)
 {
     uint8_t channel;
 
+    EADC = 0;
+    adc_enabled = 0;
+    adc_running = 0;
+    adc_fault = 0;
+    adc_frame_valid = 0;
+    adc_published_bank = 0;
+    track_adc_frames = 0;
+    track_adc_overruns = 0;
     /* 在改变端口模式及 OLED 延时之前，先写入安全电平。 */
     P60 = 1;
     P62 = 1;
@@ -192,68 +315,49 @@ void TrackHW_Init(void)
     {
         ADC_Init(sensor_pins[channel], ADC_SPEED_2X16T);
     }
+    /* TIM0 高于 ADC/UART，截止保护不被 ADC 扫描阻塞。 */
+    PADC = 0;
+    PADCH = 0;
+    EADC = 1;
+    adc_enabled = 1;
     UART_Init(UART_1, UART1_RX_P43, UART1_TX_P44, TRACK_UART_BAUD, TIM1);
     /* 库的 TIM0 清标志实现存在 TF1 操作，本工程中断入口显式清 TF0。 */
     PIT_Timer_Ms(TIM0, 1);
     PT0 = 1;
 }
 
-/** @brief 完成一次有超时上限的 ADC 转换；返回 0 表示超时或结果越界。 */
-static uint8_t adc_once(ADC_PIN_ENUM pin, uint16_t *value)
-{
-    uint16_t remaining = TRACK_ADC_TIMEOUT;
-
-    ADC_CONTR = (ADC_CONTR & 0x90) | pin;
-    ADC_CONTR |= 0x40;
-    while (!(ADC_CONTR & 0x20))
-    {
-        if (!--remaining)
-        {
-            return 0;
-        }
-    }
-    ADC_CONTR &= ~0x20;
-    *value = ((uint16_t)ADC_RES << 8) | ADC_RESL;
-    return *value <= 4095;
-}
-
+/** @brief 原子复制最新完整扫描帧；不等待、不访问尚未完成的写缓冲。 */
 uint8_t TrackHW_Sample(uint16_t *values)
 {
     uint8_t channel;
-    uint8_t sample_index;
-    uint16_t value;
-    uint16_t minimum;
-    uint16_t maximum;
-    uint16_t discarded;
-    uint32_t total;
+    uint8_t bank;
+    uint8_t previous_irq = EA;
+    uint16_t sums[TRACK_SENSOR_MAX];
+    uint32_t frame_ms;
+    uint32_t now;
 
+    EA = 0;
+    if (adc_fault || !adc_frame_valid)
+    {
+        adc_fault = 0; /* 故障至少交给前台一次，恢复后的新帧允许重新标定。 */
+        EA = previous_irq;
+        return 0;
+    }
+    bank = adc_published_bank;
+    frame_ms = adc_frame_ms;
+    now = track_milliseconds;
     for (channel = 0; channel < TRACK_SENSOR_COUNT; ++channel)
     {
-        minimum = 4095;
-        maximum = 0;
-        total = 0;
-        /* 切换复用通道后丢弃首个读数，留出模拟输入建立时间。 */
-        if (!adc_once(sensor_pins[channel], &discarded))
-        {
-            return 0;
-        }
-        for (sample_index = 0; sample_index < 5; ++sample_index)
-        {
-            if (!adc_once(sensor_pins[channel], &value))
-            {
-                return 0;
-            }
-            if (value < minimum)
-            {
-                minimum = value;
-            }
-            if (value > maximum)
-            {
-                maximum = value;
-            }
-            total += value;
-        }
-        values[channel] = (uint16_t)((total - minimum - maximum) / 3);
+        sums[channel] = adc_trim_sum[bank][channel];
+    }
+    EA = previous_irq;
+    if ((uint32_t)(now - frame_ms) >= TRACK_ADC_STALE_MS)
+    {
+        return 0;
+    }
+    for (channel = 0; channel < TRACK_SENSOR_COUNT; ++channel)
+    {
+        values[channel] = sums[channel] / 3U;
     }
     return 1;
 }
@@ -275,6 +379,7 @@ void TrackHW_Set(uint16_t servo, uint16_t left, uint16_t right, uint8_t motor_en
     uint16_t right_in1;
     uint16_t right_in2;
     uint16_t servo_compare;
+    uint16_t servo_duty;
     uint16_t swap_value;
     uint8_t previous_irq;
     uint8_t left_reversed;
@@ -301,7 +406,10 @@ void TrackHW_Set(uint16_t servo, uint16_t left, uint16_t right, uint8_t motor_en
     left_in2 = motor_compare(left_reversed ? 10000 - left : 10000);
     right_in1 = motor_compare(right_reversed ? 10000 - right : 10000);
     right_in2 = motor_compare(right_reversed ? 10000 : 10000 - right);
-    servo_compare = (uint16_t)((uint32_t)servo_period * servo / 10000UL);
+    /* 中值/限位始终按 2us 表示，载波升频不改变物理脉宽及 EEPROM 参数。 */
+    servo_duty = (uint16_t)((uint32_t)servo * TRACK_SERVO_UNIT_US *
+                            TRACK_SERVO_FREQUENCY / 100UL);
+    servo_compare = (uint16_t)((uint32_t)servo_period * servo_duty / 10000UL);
 
     /* 先在前台算完，再原子更新寄存器；截止中断锁定后绝不重新开启输出。 */
     previous_irq = EA;

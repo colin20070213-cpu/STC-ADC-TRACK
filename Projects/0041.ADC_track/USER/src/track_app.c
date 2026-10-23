@@ -372,7 +372,11 @@ static void render_body_center(void)
     sprintf(text_line, "N:%u/%u %s", sensors.center_samples, (unsigned int)TRACK_BODY_SAMPLES,
             sensors.center_valid ? "VALID" : "UNSET");
     text_at(0, 4, text_line);
+#if TRACK_SENSOR_COUNT == 4
+    sprintf(text_line, "LM:%4u RM:%4u", (unsigned int)sensors.norm[2], (unsigned int)sensors.norm[3]);
+#else
     sprintf(text_line, "ADC L:%4u R:%4u", (unsigned int)sensors.raw[0], (unsigned int)sensors.raw[1]);
+#endif
     text_at(0, 5, text_line);
     text_at(0, 6, message[0] ? message : body_status());
     text_at(0, 7, sensors.center_status == TRACK_BODY_READY ?
@@ -463,7 +467,11 @@ static void render_run(void)
     text_at(0, 3, text_line);
     sprintf(text_line, "PWM:%u/%u", control.left_motor, control.right_motor);
     text_at(0, 4, text_line);
+#if TRACK_SENSOR_COUNT == 4
+    sprintf(text_line, "LM:%u RM:%u", sensors.norm[2], sensors.norm[3]);
+#else
     sprintf(text_line, "P:%d I:%d D:%d", control.p_x10, control.i_x10, control.d_x10);
+#endif
     text_at(0, 5, text_line);
     text_at(0, 6, control.crossing ? "CROSS: STRAIGHT" : "TRACKING");
     text_at(0, 7, "< or OK: STOP");
@@ -1167,7 +1175,7 @@ static void handle_adc_failure(void)
     }
 }
 
-/** @brief 一帧采样和控制；实际电机使能只可能发生在 TRACK_RUN。 */
+/** @brief 5ms 控制帧读取最新 1ms ADC 扫描；电机使能只可能发生在 TRACK_RUN。 */
 static void control_task(void)
 {
     TrackFault result;
@@ -1256,6 +1264,8 @@ static void control_task(void)
 static void telemetry_task(uint32_t now)
 {
     uint16_t dropped_frames;
+    uint16_t adc_frames;
+    uint16_t adc_overruns;
     uint16_t length;
     uint8_t previous_irq;
 
@@ -1285,6 +1295,8 @@ static void telemetry_task(uint32_t now)
     previous_irq = EA;
     EA = 0;
     dropped_frames = track_tx_dropped;
+    adc_frames = track_adc_frames;
+    adc_overruns = track_adc_overruns;
     EA = previous_irq;
 
     length = sprintf(telemetry, "%lu,%u,%u,%u,%u,%u,", (unsigned long)now,
@@ -1296,14 +1308,15 @@ static void telemetry_task(uint32_t now)
     length += sprintf(telemetry + length, "%d,%d,%d,%d,%u,%u,%u,%u,",
                       control.p_x10, control.i_x10, control.d_x10, control.unclamped_x10,
                       control.servo, params.center, params.left, params.right);
-    sprintf(telemetry + length, "%u,%u,%u,%u,%u,%u,%u,%d,%u,%d,%u,%u,%d,%u,%u,%d,%d\r\n",
+    sprintf(telemetry + length, "%u,%u,%u,%u,%u,%u,%u,%d,%u,%d,%u,%u,%d,%u,%u,%d,%d,%u,%u\r\n",
             control.left_motor, control.right_motor, (unsigned int)control.signal_ok,
             (unsigned int)fault, (unsigned int)control.saturated, dropped_frames,
             (unsigned int)sensors.valid, sensors.center_bias,
             (unsigned int)sensors.center_valid, TrackSensors_Error(&sensors),
             params.base_duty, params.curve_duty, params.servo_left_sign,
             (unsigned int)params.left_reverse, (unsigned int)params.right_reverse,
-            (int)TRACK_STEERING_TARGET1000, TrackSensors_Feedback(&sensors));
+            (int)TRACK_STEERING_TARGET1000, TrackSensors_Feedback(&sensors),
+            adc_frames, adc_overruns);
     TrackUART_Queue(telemetry);
 }
 
@@ -1340,7 +1353,7 @@ void TrackApp_Init(void)
         "#ms,mode,rawL,rawR,raw3,raw4,nL,nR,n3,n4,e1000,kp100,ki100,kd100,"
         "P10,I10,D10,U10,servo,center,left,right,pwmL,pwmR,signal,fault,sat,drop,cal,"
         "bodyRef,bodyCal,measuredE,base,curve,servoDir,leftRev,rightRev,"
-        "target1000,feedback1000\r\n");
+        "target1000,feedback1000,adcFrames,adcOverruns\r\n");
     uart_snapshot_pending = 1;
     /* 33.1776MHz 下约 1.5s，看门狗只在前台主循环中喂。 */
     WDT_CONTR = 0x26;

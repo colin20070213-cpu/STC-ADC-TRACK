@@ -22,14 +22,20 @@ try {
         & ".\MDK\test_core_$count.exe"
         if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
     }
+    & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-DTRACK_HOST_TEST' '-DTRACK_SENSOR_COUNT=4' '-IUSER/inc' 'tests/test_four.c' 'USER/src/track_core.c' 'USER/src/track_pid.c' '-o' 'MDK/test_four.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'Four-sensor reference test compilation failed' }
+    & '.\MDK\test_four.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'Four-sensor reference tests failed' }
     & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-Wno-format' '-DTRACK_HOST_TEST' '-IUSER/inc' '-Itests' '-I../../Libraries/boards/inc' 'tests/test_app.c' 'USER/src/track_core.c' 'USER/src/track_pid.c' '../../Libraries/boards/src/Font.c' '-o' 'MDK/test_app.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Application test compilation failed' }
     & '.\MDK\test_app.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Application tests failed' }
-    & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-DTRACK_HOST_TEST' '-IUSER/inc' '-Itests' 'tests/test_hw.c' 'USER/src/track_hw.c' '-o' 'MDK/test_hw.exe'
-    if ($LASTEXITCODE -ne 0) { throw 'Hardware layer test compilation failed' }
-    & '.\MDK\test_hw.exe'
-    if ($LASTEXITCODE -ne 0) { throw 'Hardware layer tests failed' }
+    foreach ($servoHz in @(50,250)) {
+        & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-DTRACK_HOST_TEST' "-DTRACK_SERVO_FREQUENCY=$servoHz" '-IUSER/inc' '-Itests' 'tests/test_hw.c' 'USER/src/track_hw.c' '-o' "MDK/test_hw_$servoHz.exe"
+        if ($LASTEXITCODE -ne 0) { throw 'Hardware layer test compilation failed' }
+        & ".\MDK\test_hw_$servoHz.exe"
+        if ($LASTEXITCODE -ne 0) { throw 'Hardware layer tests failed' }
+    }
     & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-DTRACK_HOST_TEST' '-DTRACK_PID_DEFAULT_KP=52.75f' '-DTRACK_PID_DEFAULT_KI=0.05f' '-DTRACK_PID_DEFAULT_KD=0.32f' '-IUSER/inc' 'tests/test_defaults.c' 'USER/src/track_core.c' 'USER/src/track_pid.c' 'USER/src/track_store.c' '-o' 'MDK/test_defaults.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Default/legacy compatibility test compilation failed' }
     & '.\MDK\test_defaults.exe'

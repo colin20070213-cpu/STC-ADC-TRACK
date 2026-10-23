@@ -9,7 +9,7 @@
 unsigned char EA=1,P42=1,P46=1,P45=1,P41=1,P27=1,WDT_CONTR;
 volatile uint32_t track_milliseconds;
 volatile uint8_t track_guard_armed,track_guard_age,track_guard_trip,track_key_events;
-volatile uint16_t track_tx_dropped;
+volatile uint16_t track_tx_dropped,track_adc_frames,track_adc_overruns;
 static uint16_t hw_left,hw_right,hw_servo;
 static uint8_t hw_left_reverse,hw_right_reverse;
 static TrackParams flash_params;
@@ -78,7 +78,7 @@ static void telemetry_tests(void)
 {
     char copy[512];
     char *token;
-    long fields[39];
+    long fields[41];
     unsigned count, before;
     uint32_t now = 10000;
 
@@ -89,26 +89,27 @@ static void telemetry_tests(void)
     telemetry_task(now+TRACK_TELEMETRY_MS-1);
     assert(uart_calls==before);
     sensors.valid=1;sensors.center_valid=1;sensors.center_bias=150;
-    sensors.norm[0]=600;sensors.norm[1]=400;
+    sensors.norm[0]=600;sensors.norm[1]=400;sensors.norm[2]=sensors.norm[3]=0;
+    track_adc_frames=1234;track_adc_overruns=2;
     control.error=50;
     telemetry_task(now+=TRACK_TELEMETRY_MS);
     assert(uart_calls==before+1 && TRACK_TELEMETRY_MS==250);
     strcpy(copy,uart_line);count=0;
     for(token=strtok(copy,",");token;token=strtok(NULL,","))
     {
-        assert(count<39);fields[count++]=strtol(token,NULL,10);
+        assert(count<41);fields[count++]=strtol(token,NULL,10);
     }
-    assert(count==39 && fields[10]==50 && fields[37]==0 && fields[38]==50);
+    assert(count==41 && fields[10]==50 && fields[37]==0 && fields[38]==50 && fields[39]==1234 && fields[40]==2);
     sensors.norm[0]=400;sensors.norm[1]=600;
     control.error=-350;
     telemetry_task(now+=TRACK_TELEMETRY_MS);
-    assert(strstr(uart_line,",0,-350\r\n"));
+    assert(strstr(uart_line,",0,-350,1234,2\r\n"));
 
     /* 十字策略可以把控制误差置零，反馈仍必须保留本帧电感测量。 */
     control.error=0;control.crossing=1;
     sensors.norm[0]=1000;sensors.norm[1]=900;
     telemetry_task(now+=TRACK_TELEMETRY_MS);
-    assert(strstr(uart_line,",0,-98\r\n"));
+    assert(strstr(uart_line,",0,-98,1234,2\r\n"));
 
     /* 以各字段允许的最大打印宽度检查 8N1 的持续数据量，保留至少 20% 余量。 */
     params.kp100=TRACK_PID_KP_MAX_X100;params.ki100=params.kd100=2000;
@@ -120,10 +121,10 @@ static void telemetry_tests(void)
     control.p_x10=control.i_x10=control.d_x10=control.unclamped_x10=-32768;
     control.servo=900;control.error=-1000;
     control.left_motor=control.right_motor=4000;
-    control.signal_ok=control.saturated=1;track_tx_dropped=65535;fault=TRACK_NO_CENTER;
+    control.signal_ok=control.saturated=1;track_tx_dropped=track_adc_frames=track_adc_overruns=65535;fault=TRACK_NO_CENTER;
     telemetry_task(0xffffffffUL);
     assert(strlen(uart_line)*10000UL <= TRACK_UART_BAUD*TRACK_TELEMETRY_MS*4UL/5UL);
-    printf("PASS: 39-column telemetry, explicit target/feedback and 9600-baud budget (%u bytes/frame)\n",(unsigned)strlen(uart_line));
+    printf("PASS: 41-column telemetry, explicit target/feedback and 9600-baud budget (%u bytes/frame)\n",(unsigned)strlen(uart_line));
 
     mode=TRACK_MENU;uart_snapshot_pending=0;before=uart_calls;
     telemetry_task(0xffffffffUL);
@@ -133,11 +134,15 @@ static void telemetry_tests(void)
 /** @brief 验证居中页实际字模包含中间误差值和原始 ADC，防止只测计算不测显示。 */
 static void center_display_test(void)
 {
+    #if TRACK_SENSOR_COUNT == 4
+    const char *lines[2]={"E:  333 REF:    0", "LM:   0 RM:   0"};
+#else
     const char *lines[2]={"E:  333 REF:    0", "ADC L:  40 R:  20"};
+#endif
     unsigned line, character, column;
 
     mode=TRACK_BODY_CENTER;sensors.valid=1;sensors.center_bias=0;
-    sensors.norm[0]=500;sensors.norm[1]=250;sensors.raw[0]=40;sensors.raw[1]=20;
+    sensors.norm[0]=500;sensors.norm[1]=250;sensors.norm[2]=sensors.norm[3]=0;sensors.raw[0]=40;sensors.raw[1]=20;
     render_display();
     for(line=0;line<2;line++)
     {
@@ -157,7 +162,7 @@ int main(void)
     unsigned n, old_store_calls;uint16_t old;TrackParams before_restore, before_direction;
     TrackApp_Init();assert(mode==TRACK_MENU && !sensors.valid);
     assert(sensor_math_ok);
-    assert(strstr(uart_line,",target1000,feedback1000\r\n"));
+    assert(strstr(uart_line,",target1000,feedback1000,adcFrames,adcOverruns\r\n"));
     dump_screen("MDK/ui-menu-1.bin");menu_item=ROOT_RUN;dump_screen("MDK/ui-menu-2.bin");
     handle_keys(KEY_DOWN_EVENT);assert(menu_item==0);
     handle_keys(KEY_UP_EVENT);assert(menu_item==ROOT_RUN);
@@ -182,9 +187,10 @@ int main(void)
     sensor_math_ok=1;
     enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_CAL && !hw_left && !hw_servo);
     enter(TRACK_CAL);assert(mode==TRACK_CAL);
-    for(n=0;n<120;n++) {fake_raw[0]=fake_raw[1]=(uint16_t)(200+n*10);step();}
+    for(n=0;n<120;n++) {fake_raw[0]=fake_raw[1]=fake_raw[2]=fake_raw[3]=(uint16_t)(200+n*10);step();}
     dump_screen("MDK/ui-cal.bin");
     handle_keys(KEY_OK_EVENT);assert(sensors.valid && mode==TRACK_MENU);
+    fake_raw[2]=fake_raw[3]=0;
     enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_CENTER && !hw_left && !hw_servo);
     enter(TRACK_BODY_CENTER);assert(mode==TRACK_BODY_CENTER && !track_guard_armed);
     handle_keys(KEY_OK_EVENT);
@@ -281,13 +287,13 @@ int main(void)
     assert(editing && flash_params.kp100==before_restore.kp100 && !hw_left);
     handle_keys(KEY_LEFT_EVENT);assert(params.kp100==before_restore.kp100);store_fails=0;
     handle_keys(KEY_OK_EVENT);handle_keys(KEY_OK_EVENT);
-    assert(!editing && flash_params.kp100==(uint16_t)(TRACK_PID_DEFAULT_KP*100.0f+0.5f) && flash_params.ki100==0 && flash_params.kd100==15);
+    assert(!editing && flash_params.kp100==(uint16_t)(TRACK_PID_DEFAULT_KP*100.0f+0.5f) && flash_params.ki100==(uint16_t)(TRACK_PID_DEFAULT_KI*100.0f+0.5f) && flash_params.kd100==(uint16_t)(TRACK_PID_DEFAULT_KD*100.0f+0.5f));
     assert(params.center==before_restore.center && params.left==before_restore.left && params.right==before_restore.right);
     assert(params.base_duty==before_restore.base_duty && params.curve_duty==before_restore.curve_duty && params.lost_sum==before_restore.lost_sum);
     assert(params.servo_left_sign==-1 && params.left_reverse && params.right_reverse);
     step();assert(!hw_left && !hw_right);handle_keys(KEY_LEFT_EVENT);
     enter(TRACK_RUN);step();assert(mode==TRACK_RUN && hw_left>0);
-    for(n=0;n<200;n++)step();assert(hw_left==params.base_duty && hw_right==params.base_duty);
+    for(n=0;n<TRACK_DUTY_MAX/TRACK_MOTOR_RAMP+1;n++)step();assert(hw_left==params.base_duty && hw_right==params.base_duty);
     dump_screen("MDK/ui-run.bin");
     old=hw_servo;fake_raw[0]=fake_raw[1]=0;step();
     assert(mode==TRACK_RUN && !control.signal_ok && hw_servo==old && hw_left>0 && hw_left<=600);
@@ -302,13 +308,13 @@ int main(void)
     sample_ok=0;step();assert(mode==TRACK_MENU && fault==TRACK_ADC_ERROR);
     /* ADC fault during calibration must not allow a stale partial commit. */
     enter(TRACK_CAL);sample_ok=1;
-    for(n=0;n<120;n++){fake_raw[0]=fake_raw[1]=(uint16_t)(200+n*10);step();}
+    for(n=0;n<120;n++){fake_raw[0]=fake_raw[1]=fake_raw[2]=fake_raw[3]=(uint16_t)(200+n*10);step();}
     sample_ok=0;step();handle_keys(KEY_OK_EVENT);assert(mode==TRACK_CAL && cal_adc_error);
     handle_keys(KEY_RIGHT_EVENT);assert(!cal_adc_error && sensors.samples==0);
     handle_keys(KEY_LEFT_EVENT);sample_ok=1;
     assert(sensors.center_valid); /* Cancelled extrema calibration keeps reference. */
     enter(TRACK_CAL);
-    for(n=0;n<120;n++){fake_raw[0]=fake_raw[1]=(uint16_t)(200+n*10);step();}
+    for(n=0;n<120;n++){fake_raw[0]=fake_raw[1]=fake_raw[2]=fake_raw[3]=(uint16_t)(200+n*10);step();}
     handle_keys(KEY_OK_EVENT);assert(sensors.valid && !sensors.center_valid && sensors.center_bias==0);
     enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_CENTER && !hw_left);
     /* Held startup key cannot enter any page, but menu still renders. */

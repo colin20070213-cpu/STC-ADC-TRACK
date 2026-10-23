@@ -60,12 +60,12 @@ typedef struct
     uint16_t kp100;      /**< Kp ×100，例如 4000 对应 40.00。 */
     uint16_t ki100;      /**< Ki ×100。 */
     uint16_t kd100;      /**< Kd ×100。 */
-    uint16_t center;     /**< 舵机机械中值，占空比标度 0～10000。 */
+    uint16_t center;     /**< 舵机机械中值，1 单位=2us 脉宽，与载波频率解耦。 */
     uint16_t left;       /**< 舵机物理左限位，与运行时方向配合使用。 */
     uint16_t right;      /**< 舵机物理右限位。 */
     uint16_t base_duty;  /**< 基础动力 PWM；1000 对应 10.00%。 */
     uint16_t curve_duty; /**< 弯道最低动力，不得大于 base_duty。 */
-    uint16_t lost_sum;   /**< 左右归一化信号总和的失线阈值。 */
+    uint16_t lost_sum;   /**< 左右有效强度之和的失线阈值（每侧取横/纵较强值）。 */
     int16_t servo_left_sign; /**< +1=占空比增大向左，-1=占空比减小向左。 */
     uint8_t left_reverse;    /**< 逻辑左电机反向开关，0=正向，1=反向。 */
     uint8_t right_reverse;   /**< 逻辑右电机反向开关，0=正向，1=反向。 */
@@ -101,7 +101,7 @@ typedef struct
     int16_t i_x10;              /**< 遥测积分分量，实际值 ×10。 */
     int16_t d_x10;              /**< 遥测微分分量，实际值 ×10。 */
     int16_t unclamped_x10;      /**< 限幅前、有方向符号的偏移 ×10。 */
-    uint16_t servo;             /**< 舵机最终命令，占空比标度 0～10000。 */
+    uint16_t servo;             /**< 舵机最终命令，1 单位=2us 脉宽。 */
     uint16_t left_motor;        /**< 逻辑左轮动力 PWM。 */
     uint16_t right_motor;       /**< 逻辑右轮动力 PWM。 */
     uint8_t saturated;         /**< 舵机输出是否限幅。 */
@@ -142,7 +142,11 @@ uint8_t TrackCal_Commit(TrackSensors *sensors);
 void TrackSensors_Update(TrackSensors *sensors, const uint16_t *raw);
 /** @brief 线性归一化并限幅到 0～1000；无效量程返回 0。 */
 uint16_t TrackNormalize(uint16_t value, uint16_t low, uint16_t high);
-/** @brief 求未经居中补偿的差比和 ×1000；两路均为零时返回 0。 */
+/** @brief 获取左右有效强度；四路时每侧取横/纵较强值，双路时取原值。 */
+void TrackSensors_Strength(const TrackSensors *sensors, uint16_t *left, uint16_t *right);
+/** @brief 是否有可用于转向的有效分母；强度和有效性必须同时满足。 */
+uint8_t TrackSensors_SteeringValid(const TrackSensors *sensors);
+/** @brief 未居中补偿的误差 ×1000；四路使用论文 C4，双路保留差比和。 */
 int16_t TrackSensors_Error(const TrackSensors *sensors);
 /** @brief PID 位置反馈 ×1000：差比和减去有效居中参考，限幅到 -1000～1000。
  *  @note 这是电感估计的横向偏差，不是舵机实测角度；十字处理不会覆盖此值。

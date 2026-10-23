@@ -26,25 +26,45 @@
 /* 通道与周期：中断只维护时基、按键和截止保护，PID 在前台执行。 */
 #define TRACK_SENSOR_MAX       4      /* 数组容量，当前预留到四路。 */
 #ifndef TRACK_SENSOR_COUNT
-#define TRACK_SENSOR_COUNT     2      /* 实际启用的 ADC 通道数。 */
+#define TRACK_SENSOR_COUNT     4      /* 实际启用的 ADC 通道数。 */
 #endif
-#define TRACK_PERIOD_MS        5      /* 标称控制周期，单位 ms。 */
+#define TRACK_ADC_FRAME_MS     1U     /* TIM0 每 1ms 启动一次全部电感的非阻塞扫描。 */
+#define TRACK_ADC_STALE_MS     3U     /* 最新整帧超过此年龄即禁止使用，单位 ms。 */
+#define TRACK_PERIOD_MS        5      /* PID 周期独立保留 5ms，便于沿用当前参数。 */
+/* 数组顺序保持 L、R、LM、RM；物理从左到右为 L、LM、RM、R。
+ * 两侧 L/R 是水平横置电感；中间 LM/RM 是同平面的纵置电感。
+ * 中间引脚仅为占位：接车运行前必须按实际接线修改下面两个宏。 */
+#define TRACK_ADC_LEFT_PIN          ADC_P13
+#define TRACK_ADC_RIGHT_PIN         ADC_P01
+#define TRACK_ADC_MIDDLE_LEFT_PIN   ADC_P16 /* TODO：确认左纵电感实际引脚。 */
+#define TRACK_ADC_MIDDLE_RIGHT_PIN  ADC_P05 /* TODO：确认右纵电感实际引脚。 */
+/* 论文 C4：Err=P*[A*(L-R)+B*(LM-RM)]/[A*(L+R)+C*abs(LM-RM)]。
+ * A/B/C 使用相同整数权重，100 对应 1.00；P 使用千分比。
+ * 这些是待实车整定的起点，独立于舵机 PID 的 Kp/Ki/Kd。 */
+#define TRACK_FOUR_WEIGHT_A        100U
+#define TRACK_FOUR_WEIGHT_B        100U
+#define TRACK_FOUR_WEIGHT_C        100U
+#define TRACK_FOUR_SCALE1000       1000U
+#define TRACK_FOUR_DEN_MIN         10U /* 分母折算为 A=1 时的最低归一化强度。 */
 #define TRACK_KEY_DEBOUNCE_MS   20     /* 按键确认时间，单位 ms。 */
 #define TRACK_CONTROL_TIMEOUT  20     /* 无输出更新时的中断截止时间，单位 ms。 */
 #define TRACK_DISPLAY_PERIOD_MS 100   /* OLED 重绘周期，单位 ms。 */
 #define TRACK_UART_BAUD         9600UL /* 与蓝牙模块串口波特率保持一致，8N1。 */
 #define TRACK_TELEMETRY_MS      250    /* 完整 CSV 按 4Hz 发送，为 9600 串口留出余量。 */
 /* 极值与车身居中标定；强度标度为 0～1000，ADC 原始值为 0～4095。 */
-#define TRACK_CAL_MIN_SAMPLES  100    /* 极值标定至少采集的帧数。 */
+#define TRACK_CAL_MIN_SAMPLES  100    /* 极值标定至少采集的控制帧数，5ms/帧。 */
 #define TRACK_CAL_MIN_SPAN     100    /* 放大板正常时，每路原始 ADC 的最低有效跨度。 */
 #define TRACK_BODY_SAMPLES     200    /* 静态居中采集帧数，约 1 秒。 */
 #define TRACK_BODY_MIN_EACH    100    /* 居中时每路归一化信号的最低值。 */
 #define TRACK_BODY_MAX_BIAS    300    /* 居中允许的偏差绝对值，标度 1000。 */
 #define TRACK_BODY_MAX_SPREAD  60     /* 静态采集期间最大偏差变化范围。 */
-#define TRACK_ADC_TIMEOUT      2000U  /* 等待 ADC 的循环次数上限，不是毫秒。 */
 #define TRACK_ADC_RAIL         4090U  /* 12 位 ADC 高端饱和判据。 */
-/* 舵机：占空比使用 0～10000 标度，50Hz 下每个单位约 2us。 */
+/* 舵机三值保留旧界面标度：1 单位=2us 脉宽；换频率时三值不变。
+ * 型号未确认前维持 50Hz；确定厂家允许频率后再改本宏，不能按机械速度猜测。 */
+#ifndef TRACK_SERVO_FREQUENCY
 #define TRACK_SERVO_FREQUENCY  50UL
+#endif
+#define TRACK_SERVO_UNIT_US    2UL
 #define TRACK_SERVO_ABS_MIN    600    /* 绝对调试边界，还需服从实际机械限制。 */
 #define TRACK_SERVO_ABS_MAX    900
 #define TRACK_SERVO_DEFAULT_CENTER 760U
@@ -58,8 +78,8 @@
 #define TRACK_MOTOR_SWAP       0      /* 两组电机对调：0=否，1=是。 */
 #define TRACK_LEFT_REVERSE     0      /* 默认逻辑左电机方向，菜单可覆盖并保存。 */
 #define TRACK_RIGHT_REVERSE    0      /* 默认逻辑右电机方向，菜单可覆盖并保存。 */
-#define TRACK_BASE_DUTY        2000   /* 无有效 Flash 时基础动力 10.00%。 */
-#define TRACK_CURVE_MIN_DUTY   1000    /* 无有效 Flash 时弯道最低动力 6.00%。 */
+#define TRACK_BASE_DUTY        2000   /* 无有效 Flash 时基础动力 20.00%。 */
+#define TRACK_CURVE_MIN_DUTY   1000   /* 无有效 Flash 时弯道最低动力 10.00%。 */
 #define TRACK_DUTY_MAX         4000   /* 菜单校验和实际输出共同上限 40.00%。 */
 #define TRACK_SPEED_FINE_STEP  10U  /* 速度页精调：0.10% 占空比。 */
 #define TRACK_SPEED_COARSE_STEP 100U /* 速度页粗调：1.00% 占空比。 */
@@ -85,8 +105,20 @@
 #define TRACK_STORE_PAGE_SIZE  512U
 #define TRACK_TX_SIZE          512U
 
-#if TRACK_SENSOR_COUNT < 2 || TRACK_SENSOR_COUNT > TRACK_SENSOR_MAX
-#error Configure between two and four sensor channels
+#if TRACK_SERVO_FREQUENCY < 50 || TRACK_SERVO_FREQUENCY > 500
+#error Servo frequency must be within 50 to 500 Hz and supported by the actual servo
+#endif
+#if TRACK_ADC_FRAME_MS != 1 || TRACK_ADC_STALE_MS < 2
+#error ADC scanner requires a 1ms frame and at least 2ms freshness limit
+#endif
+#if TRACK_FOUR_WEIGHT_A < 1 || TRACK_FOUR_WEIGHT_A > 1000 || TRACK_FOUR_WEIGHT_B > 1000 || TRACK_FOUR_WEIGHT_C > 1000
+#error Four sensor weights must be integers from 0 to 1000 with A positive
+#endif
+#if TRACK_FOUR_SCALE1000 < 1 || TRACK_FOUR_SCALE1000 > 2000 || TRACK_FOUR_DEN_MIN < 1 || TRACK_FOUR_DEN_MIN > 1000
+#error Invalid four sensor scale or denominator guard
+#endif
+#if TRACK_SENSOR_COUNT != 2 && TRACK_SENSOR_COUNT != 4
+#error Configure exactly two or four sensor channels
 #endif
 #if TRACK_ERROR_SIGN != 1 && TRACK_ERROR_SIGN != -1
 #error TRACK_ERROR_SIGN must be +1 or -1

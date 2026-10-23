@@ -18,17 +18,21 @@ extern volatile uint8_t track_guard_armed;   /**< 执行器截止保护是否启
 extern volatile uint8_t track_guard_age;     /**< 距离上次有效输出更新的毫秒数。 */
 extern volatile uint8_t track_guard_trip;    /**< 截止触发锁存，需重新 Arm 才能清除。 */
 extern volatile uint8_t track_key_events;    /**< 中断发布、前台取走的按键事件。 */
+extern volatile uint16_t track_adc_frames;   /**< 1ms 扫描完成整帧数，16 位自然回绕。 */
+extern volatile uint16_t track_adc_overruns; /**< 来不及在下一毫秒启动新帧的累计次数。 */
 extern volatile uint16_t track_tx_dropped;   /**< 串口队列满时丢弃的新帧累计。 */
 
 /** @brief 先设置安全电平，再初始化 PWM、ADC、按键、UART 和 1ms 时基。 */
 void TrackHW_Init(void);
 /** @brief 由 TIM0 每 1ms 调用，处理截止保护及按键消抖，不做浮点运算。 */
 void TrackHW_TickISR(void);
+/** @brief ADC 转换完成中断入口；无等待、浮点或乘除库调用。 */
+void TrackHW_AdcISR(void);
 /** @brief 关闭电机 PWM、两组输入置同高；关闭舵机脉冲并拉低 P74。可从 ISR 调用。 */
 void TrackHW_Stop(void);
 /**
- * @brief 写入执行器命令，所有占空比采用 0～10000 标度。
- * @param servo        舵机占空比，必须在绝对调试边界内。
+ * @brief 写入执行器命令；电机使用万分比占空比，舵机使用 2us 脉宽单位。
+ * @param servo        舵机脉宽值（1 单位=2us），必须在绝对调试边界内。
  * @param left         逻辑左电机动力，不得超过 TRACK_DUTY_MAX。
  * @param right        逻辑右电机动力，不得超过 TRACK_DUTY_MAX。
  * @param motor_enable 仅运行模式传 1，其余模式传 0。
@@ -43,7 +47,7 @@ uint8_t TrackHW_SetMotorDirections(uint8_t left_reverse, uint8_t right_reverse);
 uint32_t TrackHW_Now(void);
 /** @brief 原子取走并清空按键事件，返回 KEY_*_EVENT 位组合。 */
 uint8_t TrackHW_Keys(void);
-/** @brief 采集全部启用通道并去极值平均；ADC 超时/越界返回 0。 */
+/** @brief 复制最新完整 ADC 扫描并去极值平均；未就绪/过期/故障返回 0，不阻塞。 */
 uint8_t TrackHW_Sample(uint16_t *values);
 /** @brief 喂硬件看门狗；不从周期中断持续喂狗。 */
 void TrackHW_FeedWatchdog(void);
