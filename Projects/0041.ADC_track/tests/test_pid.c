@@ -23,9 +23,9 @@ int main(void)
     TrackPID_Reset(&state);
     assert_near(TrackPID_Calculate(&state, &gains, 0.5f, -50, 50, 1), 20.0f);
     assert_near(state.derivative, 0.0f);
-    /* 5ms 内误差增加 0.25，变化率为 50；滤波后 12.5，D 项为 1.875。 */
-    assert_near(TrackPID_Calculate(&state, &gains, 0.75f, -50, 50, 1), 31.875f);
-    assert_near(state.derivative, 12.5f);
+    /* 2ms 内误差增加 0.25，变化率为 125；滤波后 31.25，D 项为 4.6875。 */
+    assert_near(TrackPID_Calculate(&state, &gains, 0.75f, -50, 50, 1), 34.6875f);
+    assert_near(state.derivative, 31.25f);
 
     gains.kp = 200.0f;
     gains.ki = 20.0f;
@@ -48,7 +48,7 @@ int main(void)
     TrackPID_Calculate(&state, &gains, 1.0f, -10, 10, 1);
     assert_near(state.integral, 1.0f);
     TrackPID_Calculate(&state, &gains, -1.0f, -10, 10, 1);
-    assert_near(state.integral, 0.995f);
+    assert_near(state.integral, 0.998f);
 
     TrackPID_Reset(&state);
     gains.ki = 0.0f;

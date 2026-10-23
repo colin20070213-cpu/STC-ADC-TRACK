@@ -15,6 +15,7 @@ static uint8_t hw_left_reverse,hw_right_reverse;
 static TrackParams flash_params;
 static uint8_t store_fails, sample_ok=1, flash_valid;
 static unsigned store_calls;
+static unsigned sample_calls;
 static unsigned uart_calls;
 static uint16_t fake_raw[4]={500,500,500,500};
 static char uart_line[512];
@@ -23,7 +24,7 @@ void TrackHW_Arm(uint8_t enable) { track_guard_armed=enable;track_guard_age=0;tr
 uint8_t TrackHW_SetMotorDirections(uint8_t left,uint8_t right) { assert(!track_guard_armed);hw_left_reverse=left;hw_right_reverse=right;return 1; }
 uint32_t TrackHW_Now(void) { return track_milliseconds; }
 uint8_t TrackHW_Keys(void) { uint8_t k=track_key_events;track_key_events=0;return k; }
-uint8_t TrackHW_Sample(uint16_t *v) { memcpy(v,fake_raw,sizeof(fake_raw));return sample_ok; }
+uint8_t TrackHW_Sample(uint16_t *v) { ++sample_calls;memcpy(v,fake_raw,sizeof(fake_raw));return sample_ok; }
 void TrackHW_Set(uint16_t s,uint16_t l,uint16_t r,uint8_t motor) { hw_servo=s;hw_left=motor?l:0;hw_right=motor?r:0; }
 void TrackHW_FeedWatchdog(void) {}
 uint8_t TrackStore_Load(TrackParams *p) { if(flash_valid){*p=flash_params;return 1;}TrackParams_Default(p);flash_params=*p;return 0; }
@@ -36,7 +37,7 @@ void LCD_WrDat(uint8_t v) {(void)v;}
 /* Include the real application: test its menu transitions, not a UI model. */
 #include "../USER/src/track_app.c"
 
-static void step(void) { track_milliseconds+=5;control_task(); }
+static void step(void) { track_milliseconds+=TRACK_PERIOD_MS;control_task(); }
 /* 经由真实父/子菜单进入叶页面，避免直接指定业务模式绕过菜单分发。 */
 static void enter(TrackMode target)
 {
@@ -157,6 +158,42 @@ static void center_display_test(void)
     }
     dump_screen("MDK/ui-body-low-signal.bin");
 }
+/** @brief 实际调度每 2ms 执行一次；ADC 连续饱和仍按约 15ms 判断。 */
+static void timing_tests(void)
+{
+    unsigned elapsed, before, channel;
+    uint32_t started;
+
+    TrackApp_Init();
+    before=sample_calls;
+    for(elapsed=1;elapsed<=20;elapsed++)
+    {
+        ++track_milliseconds;
+        TrackApp_Task();
+        assert(sample_calls-before==elapsed/2);
+    }
+    assert(TRACK_PERIOD_MS==2 && TRACK_CAL_MIN_SAMPLES*TRACK_PERIOD_MS==500);
+    assert(TRACK_BODY_SAMPLES*TRACK_PERIOD_MS==1000);
+    sensors.valid=1;
+    for(channel=0;channel<TRACK_SENSOR_COUNT;channel++)
+    {
+        sensors.low[channel]=0;sensors.high[channel]=4000;
+        fake_raw[channel]=500;
+    }
+    enter(TRACK_PID);
+    fake_raw[0]=4095;
+    started=track_milliseconds;
+    for(elapsed=1;elapsed<TRACK_ADC_RAIL_FRAMES;elapsed++)
+    {
+        step();assert(mode==TRACK_PID);
+    }
+    step();
+    assert(mode==TRACK_MENU && fault==TRACK_ADC_ERROR && !hw_left && !hw_servo);
+    assert(track_milliseconds-started==16);
+    fake_raw[0]=500;
+    puts("PASS: actual 2ms scheduler, 500ms calibration/1s centering and 16ms rail confirmation");
+}
+
 int main(void)
 {
     unsigned n, old_store_calls;uint16_t old;TrackParams before_restore, before_direction;
@@ -187,7 +224,7 @@ int main(void)
     sensor_math_ok=1;
     enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_CAL && !hw_left && !hw_servo);
     enter(TRACK_CAL);assert(mode==TRACK_CAL);
-    for(n=0;n<120;n++) {fake_raw[0]=fake_raw[1]=fake_raw[2]=fake_raw[3]=(uint16_t)(200+n*10);step();}
+    for(n=0;n<TRACK_CAL_MIN_SAMPLES+20;n++) {fake_raw[0]=fake_raw[1]=fake_raw[2]=fake_raw[3]=(uint16_t)(200+n*1190/(TRACK_CAL_MIN_SAMPLES+19));step();}
     dump_screen("MDK/ui-cal.bin");
     handle_keys(KEY_OK_EVENT);assert(sensors.valid && mode==TRACK_MENU);
     fake_raw[2]=fake_raw[3]=0;
@@ -302,19 +339,19 @@ int main(void)
     handle_keys(KEY_LEFT_EVENT|KEY_UP_EVENT);assert(mode==TRACK_MENU && !hw_left && !hw_servo);
     enter(TRACK_RUN);track_guard_trip=1;step();assert(mode==TRACK_MENU && fault==TRACK_TIMEOUT && !hw_servo);
     enter(TRACK_RUN);fake_raw[0]=fake_raw[1]=0;
-    for(n=5;n<TRACK_ZERO_CONFIRM_MS;n+=5){step();assert(mode==TRACK_RUN);}
+    for(n=TRACK_PERIOD_MS;n<TRACK_ZERO_CONFIRM_MS;n+=TRACK_PERIOD_MS){step();assert(mode==TRACK_RUN);}
     step();assert(mode==TRACK_MENU && fault==TRACK_LOST && !hw_left && !hw_servo);
     enter(TRACK_PID);step();assert(mode==TRACK_PID && !hw_left && !hw_servo);
     sample_ok=0;step();assert(mode==TRACK_MENU && fault==TRACK_ADC_ERROR);
     /* ADC fault during calibration must not allow a stale partial commit. */
     enter(TRACK_CAL);sample_ok=1;
-    for(n=0;n<120;n++){fake_raw[0]=fake_raw[1]=fake_raw[2]=fake_raw[3]=(uint16_t)(200+n*10);step();}
+    for(n=0;n<TRACK_CAL_MIN_SAMPLES+20;n++){fake_raw[0]=fake_raw[1]=fake_raw[2]=fake_raw[3]=(uint16_t)(200+n*1190/(TRACK_CAL_MIN_SAMPLES+19));step();}
     sample_ok=0;step();handle_keys(KEY_OK_EVENT);assert(mode==TRACK_CAL && cal_adc_error);
     handle_keys(KEY_RIGHT_EVENT);assert(!cal_adc_error && sensors.samples==0);
     handle_keys(KEY_LEFT_EVENT);sample_ok=1;
     assert(sensors.center_valid); /* Cancelled extrema calibration keeps reference. */
     enter(TRACK_CAL);
-    for(n=0;n<120;n++){fake_raw[0]=fake_raw[1]=fake_raw[2]=fake_raw[3]=(uint16_t)(200+n*10);step();}
+    for(n=0;n<TRACK_CAL_MIN_SAMPLES+20;n++){fake_raw[0]=fake_raw[1]=fake_raw[2]=fake_raw[3]=(uint16_t)(200+n*1190/(TRACK_CAL_MIN_SAMPLES+19));step();}
     handle_keys(KEY_OK_EVENT);assert(sensors.valid && !sensors.center_valid && sensors.center_bias==0);
     enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_CENTER && !hw_left);
     /* Held startup key cannot enter any page, but menu still renders. */
@@ -325,6 +362,7 @@ int main(void)
     P27=0;track_key_events=KEY_OK_EVENT;TrackApp_Task();assert(mode==TRACK_MENU);
     P27=1;track_milliseconds+=30;TrackApp_Task();assert(!startup_keys_locked && mode==TRACK_MENU);
     puts("PASS: grouped menus/back/cursor, direction save/cancel/failure/reboot, servo limit swap, speed/PID/calibration and motor interlocks");
+    timing_tests();
     telemetry_tests();
     center_display_test();
     return 0;

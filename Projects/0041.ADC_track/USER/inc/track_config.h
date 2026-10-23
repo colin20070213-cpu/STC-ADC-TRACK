@@ -23,14 +23,14 @@
 #define TRACK_PID_INTEGRAL_MAX  2.0f   /* 积分累计上限，单位：误差·秒。 */
 #define TRACK_STEERING_TARGET1000 0   /* 居中补偿后的目标偏差，正常循迹保持为 0。 */
 
-/* 通道与周期：中断只维护时基、按键和截止保护，PID 在前台执行。 */
+/* 通道与周期：时基中断维护按键/保护并触发 ADC 扫描，PID 在前台执行。 */
 #define TRACK_SENSOR_MAX       4      /* 数组容量，当前预留到四路。 */
 #ifndef TRACK_SENSOR_COUNT
 #define TRACK_SENSOR_COUNT     4      /* 实际启用的 ADC 通道数。 */
 #endif
 #define TRACK_ADC_FRAME_MS     1U     /* TIM0 每 1ms 启动一次全部电感的非阻塞扫描。 */
 #define TRACK_ADC_STALE_MS     3U     /* 最新整帧超过此年龄即禁止使用，单位 ms。 */
-#define TRACK_PERIOD_MS        5      /* PID 周期独立保留 5ms，便于沿用当前参数。 */
+#define TRACK_PERIOD_MS        2U     /* 转向 PID 标称周期 2ms，独立于 1ms ADC 扫描。 */
 /* 数组顺序保持 L、R、LM、RM；物理从左到右为 L、LM、RM、R。
  * 两侧 L/R 是水平横置电感；中间 LM/RM 是同平面的纵置电感。
  * 中间引脚仅为占位：接车运行前必须按实际接线修改下面两个宏。 */
@@ -52,12 +52,14 @@
 #define TRACK_UART_BAUD         9600UL /* 与蓝牙模块串口波特率保持一致，8N1。 */
 #define TRACK_TELEMETRY_MS      250    /* 完整 CSV 按 4Hz 发送，为 9600 串口留出余量。 */
 /* 极值与车身居中标定；强度标度为 0～1000，ADC 原始值为 0～4095。 */
-#define TRACK_CAL_MIN_SAMPLES  100    /* 极值标定至少采集的控制帧数，5ms/帧。 */
+#define TRACK_CAL_MIN_SAMPLES  ((500U + TRACK_PERIOD_MS - 1U) / TRACK_PERIOD_MS) /* 至少约 0.5 秒。 */
 #define TRACK_CAL_MIN_SPAN     100    /* 放大板正常时，每路原始 ADC 的最低有效跨度。 */
-#define TRACK_BODY_SAMPLES     200    /* 静态居中采集帧数，约 1 秒。 */
+#define TRACK_BODY_SAMPLES     ((1000U + TRACK_PERIOD_MS - 1U) / TRACK_PERIOD_MS) /* 保持约 1 秒。 */
 #define TRACK_BODY_MIN_EACH    100    /* 居中时每路归一化信号的最低值。 */
 #define TRACK_BODY_MAX_BIAS    300    /* 居中允许的偏差绝对值，标度 1000。 */
 #define TRACK_BODY_MAX_SPREAD  60     /* 静态采集期间最大偏差变化范围。 */
+#define TRACK_ADC_RAIL_CONFIRM_MS 15U /* 保留原约 15ms 连续饱和确认；2ms 下取 8 帧。 */
+#define TRACK_ADC_RAIL_FRAMES   ((TRACK_ADC_RAIL_CONFIRM_MS + TRACK_PERIOD_MS - 1U) / TRACK_PERIOD_MS)
 #define TRACK_ADC_RAIL         4090U  /* 12 位 ADC 高端饱和判据。 */
 /* 舵机三值保留旧界面标度：1 单位=2us 脉宽；换频率时三值不变。
  * 型号未确认前维持 50Hz；确定厂家允许频率后再改本宏，不能按机械速度猜测。 */
@@ -83,16 +85,16 @@
 #define TRACK_DUTY_MAX         4000   /* 菜单校验和实际输出共同上限 40.00%。 */
 #define TRACK_SPEED_FINE_STEP  10U  /* 速度页精调：0.10% 占空比。 */
 #define TRACK_SPEED_COARSE_STEP 100U /* 速度页粗调：1.00% 占空比。 */
-#define TRACK_MOTOR_RAMP       10    /* 每个周期最多增加的动力单位。 */
+#define TRACK_MOTOR_RAMP       (2U * TRACK_PERIOD_MS) /* 每毫秒 2 单位，2ms 每次增加 4。 */
 #define TRACK_LEFT_TRIM        0     /* 左轮开环动力补偿，可正可负。 */
 #define TRACK_RIGHT_TRIM       0     /* 右轮开环动力补偿，可正可负。 */
 /* 失线与十字判据；使用未扣除居中参考的电感强度。 */
 #define TRACK_LOST_SUM_MIN     1U    /* 保存参数的合法下界；0 会使全零信号无法触发失线。 */
 #define TRACK_LOST_SUM_MAX     500U  /* 保存参数的合法上界，与代码初值分开定义。 */
 #define TRACK_LOST_SUM         40   /* 左右归一化总和低于此值进入弱信号确认。 */
-#define TRACK_HARD_LOST_EACH   15    /* 两路均低于此值，采用较短的失线确认时间。 */
+#define TRACK_HARD_LOST_EACH   15    /* 全部电感均低于此值，采用较短失线确认。 */
 #define TRACK_LOST_CONFIRM_MS  100U  /* 普通弱信号持续时间，按标称控制周期累计。 */
-#define TRACK_ZERO_CONFIRM_MS  50U   /* 两路同时近零持续时间，单位 ms。 */
+#define TRACK_ZERO_CONFIRM_MS  50U   /* 全部电感同时近零持续时间，单位 ms。 */
 #define TRACK_LOST_RECOVER_MARGIN 50U /* 恢复需高于进入阈值，避免临界值反复切换。 */
 #define TRACK_LOST_DUTY_MAX    600U  /* 确认期间保持转向，动力不超过 6%，且不加速。 */
 #define TRACK_CROSS_SUM        1500  /* 十字候选的总强度下限。 */

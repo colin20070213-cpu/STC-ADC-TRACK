@@ -1175,7 +1175,7 @@ static void handle_adc_failure(void)
     }
 }
 
-/** @brief 5ms 控制帧读取最新 1ms ADC 扫描；电机使能只可能发生在 TRACK_RUN。 */
+/** @brief 2ms 控制帧读取最新 1ms ADC 扫描；电机使能只可能发生在 TRACK_RUN。 */
 static void control_task(void)
 {
     TrackFault result;
@@ -1216,7 +1216,7 @@ static void control_task(void)
         {
             if (sensors.raw[channel] >= TRACK_ADC_RAIL)
             {
-                if (++rail_count[channel] >= 3)
+                if (++rail_count[channel] >= TRACK_ADC_RAIL_FRAMES)
                 {
                     return_menu(TRACK_ADC_ERROR);
                     return;
@@ -1260,7 +1260,7 @@ static void control_task(void)
     }
 }
 
-/** @brief 输出参数快照和 4Hz PID 遥测；控制仍为 5ms，串口拥塞时丢帧。 */
+/** @brief 输出参数快照和 4Hz PID 遥测；控制为 2ms，串口拥塞时丢帧。 */
 static void telemetry_task(uint32_t now)
 {
     uint16_t dropped_frames;

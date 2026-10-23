@@ -24,19 +24,19 @@ static void calibration_tests(void)
     TrackSensors s; uint16_t raw[4] = {0}; unsigned n,k;
     memset(&s,0,sizeof(s)); TrackCal_Begin(&s);
     assert(!TrackCal_Commit(&s) && !s.valid && s.bad_channel == 255);
-    for (n=0;n<120;n++) {
+    for (n=0;n<TRACK_CAL_MIN_SAMPLES+20;n++) {
         for (k=0;k<TRACK_SENSOR_COUNT;k++) raw[k]=(uint16_t)(200+k*50+n*10);
         TrackCal_Sample(&s,raw);
     }
     assert(TrackCal_Commit(&s) && s.valid);
     for(k=0;k<TRACK_SENSOR_COUNT;k++) {
-        assert(s.low[k] == 200+k*50 && s.high[k] == 1390+k*50);
-        raw[k]=s.low[k]+595;
+        assert(s.low[k] == 200+k*50 && s.high[k] == 200+k*50+(TRACK_CAL_MIN_SAMPLES+19)*10);
+        raw[k]=s.low[k]+(s.high[k]-s.low[k])/2;
     }
     TrackSensors_Update(&s,raw);
     for(k=0;k<TRACK_SENSOR_COUNT;k++) assert(s.norm[k]==500);
     TrackCal_Begin(&s);
-    for(n=0;n<100;n++) TrackCal_Sample(&s,raw);
+    for(n=0;n<TRACK_CAL_MIN_SAMPLES;n++) TrackCal_Sample(&s,raw);
     assert(!TrackCal_Commit(&s) && s.valid && s.low[0]==200);
     assert(TrackNormalize(0,100,1100)==0);
     assert(TrackNormalize(600,100,1100)==500);
@@ -44,7 +44,7 @@ static void calibration_tests(void)
     assert(TrackNormalize(1,100,100)==0);
     assert(TrackNormalize(65535,0,4095)==1000);
     TrackCal_Begin(&s); raw[0]=4095;
-    for(n=0;n<100;n++) TrackCal_Sample(&s,raw);
+    for(n=0;n<TRACK_CAL_MIN_SAMPLES;n++) TrackCal_Sample(&s,raw);
     assert(!TrackCal_Commit(&s));
     /* 恢复正常放大板阈值后，0～10 不应通过；量程 0～100 可通过。 */
     memset(&s,0,sizeof(s));memset(raw,0,sizeof(raw));TrackCal_Begin(&s);
@@ -272,28 +272,28 @@ static void loss_confirmation_tests(void)
     memset(&sensors,0,sizeof(sensors));sensors.valid=1;
     sensors.norm[0]=sensors.norm[1]=500;
     TrackControl_Reset(&control,&params);
-    for(n=0;n<450;n++)assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
+    for(n=0;n<TRACK_DUTY_MAX/TRACK_MOTOR_RAMP+1;n++)assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
     assert(control.left_motor==4000 && control.right_motor==4000);
     sensors.norm[0]=800;sensors.norm[1]=200;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
     held_servo=control.servo;
     sensors.norm[0]=20;sensors.norm[1]=60;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
-    assert(!control.signal_ok && control.weak_ms==5 && !control.zero_ms);
+    assert(!control.signal_ok && control.weak_ms==TRACK_PERIOD_MS && !control.zero_ms);
     assert(control.servo==held_servo && control.left_motor==600 && control.right_motor==600);
     assert(!control.steering_pid.initialized);
     sensors.norm[0]=sensors.norm[1]=90; /* 总和 180 位于恢复滞回区内。 */
-    assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && control.weak_ms==10);
+    assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && control.weak_ms==2*TRACK_PERIOD_MS);
     sensors.norm[0]=sensors.norm[1]=100;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && control.signal_ok);
-    assert(!control.weak_ms && !control.zero_ms && control.left_motor==610);
+    assert(!control.weak_ms && !control.zero_ms && control.left_motor==600+TRACK_MOTOR_RAMP);
 
     for(index=0;index<sizeof(cases)/sizeof(cases[0]);index++)
     {
         TrackControl_Reset(&control,&params);control.left_motor=control.right_motor=4000;
         control.servo=params.left;control.crossing=1;
         sensors.norm[0]=cases[index][0];sensors.norm[1]=cases[index][1];
-        for(elapsed=5;elapsed<cases[index][2];elapsed+=5)
+        for(elapsed=TRACK_PERIOD_MS;elapsed<cases[index][2];elapsed+=TRACK_PERIOD_MS)
         {
             assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
             assert(!control.signal_ok && control.left_motor==600 && control.right_motor==600);
