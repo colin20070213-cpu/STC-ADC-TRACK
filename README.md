@@ -6,7 +6,7 @@
 Keil 工程：Projects/0041.ADC_track/MDK/Project_Template.uvproj。
 新版 HEX：Projects/0041.ADC_track/MDK/Objects/Project_Template.hex。
 
-- 两侧横电感 P13/P01 不变；中间同平面纵电感引脚宏必须按实际接线修改，当前 P16/P05 仅占位。
+- 两侧横电感 P13/P01 不变；中间同平面纵电感引脚宏必须按实际接线修改，当前配置 P10/P05，需按实际接线核对。
 - 论文 C4 四路加权误差、独立归一化、居中参考和四路失线检测。
 - TIM0 每 1ms 触发整帧非阻塞 ADC 扫描，ADC 中断推进；PID 为 2ms（500Hz）。
 - 舵机已确认 SPT5410LV，控制载波为 330Hz；三值与载波解耦，1 单位始终为 2us。
@@ -18,4 +18,6 @@ Keil 工程：Projects/0041.ADC_track/MDK/Project_Template.uvproj。
 
 在 Projects/0041.ADC_track 目录运行 tools/test.ps1、tools/build.ps1；GCC/Keil 环境需正确配置。BASELINE_MANIFEST.json 对应旧标签原文件；FOUR_SENSOR_MANIFEST.json 对应当前分支内容。
 
-2ms 更新保持最低标定采集 0.5 秒（250 帧）、居中 1 秒（500 帧）、电机原加速斜率及 50/100ms 失线确认；连续 ADC 饱和确认约 16ms。已增加真实前台 2ms 调度回归测试。用户已确认 SPT5410LV，PWM 为 330Hz。
+2ms 更新保持最低标定采集 0.5 秒（250 帧）、居中 1 秒（500 帧）、电机原加速斜率及原控制保护；连续 ADC 饱和确认约 16ms。已增加真实前台 2ms 调度回归测试。用户已确认 SPT5410LV，PWM 为 330Hz。
+
+2026-10-25 更新：通过发车校验后关闭 OLED，运行中停止绘图与 SPI 刷新；失线、手动停车或其他故障时先停输出，再完整写入故障菜单并亮屏。行驶门槛取 min(保存值,20)，恢复余量 10，四路近零确认 120ms，普通弱信号/分母无效确认 250ms。标定和静态 PID 阈值不变。用户当前左纵 P10、右纵 P05 的配置保留。新增 OLED 总线静默、停车整帧亮屏和 120/250ms 边界测试，完整回归与 Keil 编译均通过；实车响应待验证。

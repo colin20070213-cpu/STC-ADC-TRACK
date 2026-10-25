@@ -87,7 +87,7 @@ static void pid_tests(void)
     for(n=TRACK_PERIOD_MS;n<TRACK_ZERO_CONFIRM_MS;n+=TRACK_PERIOD_MS)
         assert(TrackControl_Step(&c,&s,&p,1)==TRACK_OK);
     assert(TrackControl_Step(&c,&s,&p,1)==TRACK_LOST);
-    p.lost_sum=150;TrackControl_Reset(&c,&p);s.norm[0]=40;s.norm[1]=40;
+    p.lost_sum=150;TrackControl_Reset(&c,&p);s.norm[0]=5;s.norm[1]=5;
     for(n=TRACK_PERIOD_MS;n<TRACK_LOST_CONFIRM_MS;n+=TRACK_PERIOD_MS)
         assert(TrackControl_Step(&c,&s,&p,1)==TRACK_OK && !c.signal_ok && !c.left_motor);
     assert(TrackControl_Step(&c,&s,&p,1)==TRACK_LOST);
@@ -262,9 +262,9 @@ static void loss_confirmation_tests(void)
     TrackControl control;
     unsigned n, elapsed, index;
     uint16_t held_servo;
-    const uint16_t cases[][3]={{0,0,50},
-        {TRACK_HARD_LOST_EACH-1,TRACK_HARD_LOST_EACH-1,50},
-        {TRACK_HARD_LOST_EACH,TRACK_HARD_LOST_EACH,100},{0,149,100}};
+    const uint16_t cases[][3]={{0,0,120},
+        {TRACK_HARD_LOST_EACH-1,TRACK_HARD_LOST_EACH-1,120},
+        {TRACK_HARD_LOST_EACH,TRACK_HARD_LOST_EACH,250},{0,19,250}};
 
     TrackParams_Default(&params);params.base_duty=4000;params.curve_duty=1000;
     params.lost_sum=150; /* 此用例固定总强度，分别验证弱信号和双路近零。 */
@@ -277,14 +277,14 @@ static void loss_confirmation_tests(void)
     sensors.norm[0]=800;sensors.norm[1]=200;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
     held_servo=control.servo;
-    sensors.norm[0]=20;sensors.norm[1]=60;
+    sensors.norm[0]=5;sensors.norm[1]=10;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
     assert(!control.signal_ok && control.weak_ms==TRACK_PERIOD_MS && !control.zero_ms);
     assert(control.servo==held_servo && control.left_motor==600 && control.right_motor==600);
     assert(!control.steering_pid.initialized);
-    sensors.norm[0]=sensors.norm[1]=90; /* 总和 180 位于恢复滞回区内。 */
+    sensors.norm[0]=sensors.norm[1]=14; /* 总和 28 位于运行恢复门槛 30 以下。 */
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && control.weak_ms==2*TRACK_PERIOD_MS);
-    sensors.norm[0]=sensors.norm[1]=100;
+    sensors.norm[0]=sensors.norm[1]=15;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && control.signal_ok);
     assert(!control.weak_ms && !control.zero_ms && control.left_motor==600+TRACK_MOTOR_RAMP);
 
@@ -312,7 +312,14 @@ static void loss_confirmation_tests(void)
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
     assert(control.left_motor==200 && control.right_motor==300);
     assert(TrackControl_Step(&control,&sensors,&params,0)==TRACK_OK && !control.left_motor && !control.right_motor);
-    puts("PASS: 4000 PWM, transient loss recovery, held steering, recovery hysteresis and 50/100 ms loss deadlines");
+    /* EEPROM 旧阈值仍可为 150，但行驶门槛限制到 20；静态 PID 仍使用原值。 */
+    TrackControl_Reset(&control,&params);sensors.norm[0]=sensors.norm[1]=30;
+    assert(params.lost_sum==150);
+    assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && control.signal_ok);
+    TrackControl_Reset(&control,&params);
+    assert(TrackControl_Step(&control,&sensors,&params,0)==TRACK_OK && !control.signal_ok);
+    assert(params.lost_sum==150);
+    puts("PASS: 4000 PWM, run threshold cap/unchanged saved parameters, recovery hysteresis and 120/250 ms loss deadlines");
 }
 static void store_tests(void)
 {

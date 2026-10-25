@@ -20,6 +20,7 @@
 #ifdef TRACK_HOST_TEST
 extern void LCD_Set_Pos(uint8_t x, uint8_t y);
 extern void LCD_WrDat(uint8_t value);
+extern void LCD_WrCmd(uint8_t command);
 #endif
 
 /** @brief 菜单层级；叶页面返回所属大类，子菜单左键返回主菜单。 */
@@ -104,6 +105,7 @@ static uint8_t coarse_step;
 static uint8_t defaults_loaded;
 static uint8_t uart_snapshot_pending;
 static uint8_t display_busy;
+static uint8_t display_off;      /**< 运行中熄屏；停车后完整更新画面再亮屏。 */
 static uint8_t cal_adc_error;
 static uint8_t rail_count[TRACK_SENSOR_MAX];
 static uint8_t startup_keys_locked;
@@ -553,7 +555,11 @@ static void display_task(uint32_t now)
 {
     uint8_t byte_index;
 
-    if (!display_busy && (uint32_t)(now - last_display) >= TRACK_DISPLAY_PERIOD_MS)
+    if (mode == TRACK_RUN)
+    {
+        return; /* 行驶中不绘制、不定位、不发送 OLED 数据或命令。 */
+    }
+    if (!display_busy && (display_off || (uint32_t)(now - last_display) >= TRACK_DISPLAY_PERIOD_MS))
     {
         render_display();
         display_cursor = 0;
@@ -570,6 +576,12 @@ static void display_task(uint32_t now)
         if (display_cursor == sizeof(framebuffer))
         {
             display_busy = 0;
+            if (display_off)
+            {
+                /* 先让故障/菜单整帧进入显存，避免亮屏时闪出旧画面。 */
+                LCD_WrCmd(0xAF);
+                display_off = 0;
+            }
         }
     }
 }
@@ -597,6 +609,8 @@ static void return_menu(TrackFault reason)
     TrackHW_Arm(0);
     mode = TRACK_MENU;
     fault = reason;
+    display_busy = 0;
+    display_cursor = 0;
     control.left_motor = 0;
     control.right_motor = 0;
     editing = 0;
@@ -708,6 +722,11 @@ static void enter_menu_item(void)
                 fault = TRACK_BAD_PARAMS;
                 break;
             }
+            /* 先熄屏、取消未完成的分片刷新，再允许执行器工作。 */
+            LCD_WrCmd(0xAE);
+            display_off = 1;
+            display_busy = 0;
+            display_cursor = 0;
             mode = TRACK_RUN;
             TrackHW_Arm(1);
             break;
@@ -1342,6 +1361,8 @@ void TrackApp_Init(void)
     memset(menu_selection, 0, sizeof(menu_selection));
     editing = 0;
     display_busy = 0;
+    display_off = 0;
+    LCD_WrCmd(0xAF);
     reset_pid();
     startup_keys_locked = 1;
     startup_release_since = TrackHW_Now();

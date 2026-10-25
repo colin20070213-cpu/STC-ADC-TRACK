@@ -1,9 +1,9 @@
 {
   "hex": "MDK\\Objects\\Project_Template.hex",
-  "sha256": "8987c8f75e851985d8dfd54053da3a6949a43d11637ef0bf6a92d3e2fc7443d8",
-  "flash_data_bytes": 42854,
+  "sha256": "641aadb3f8caf295226aab597b63c2d1bb25586069d054aefbf0a257f70cb324",
+  "flash_data_bytes": 42943,
   "first_address": "FF0000",
-  "last_address": "FFA765",
+  "last_address": "FFA7BE",
   "reserved_parameter_cpu_addresses": [
     "FE0000-FE01FF",
     "FE0200-FE03FF"

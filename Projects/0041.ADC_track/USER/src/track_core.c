@@ -686,6 +686,11 @@ TrackFault TrackControl_Step(TrackControl *control, const TrackSensors *sensors,
     TrackSensors_Strength(sensors, &left_signal, &right_signal);
     signal_sum = left_signal + right_signal;
     required_sum = params->lost_sum;
+    if (drive && required_sum > TRACK_RUN_LOST_SUM_MAX)
+    {
+        /* 只放宽行驶判定，居中标定和静态 PID 仍使用原参数。 */
+        required_sum = TRACK_RUN_LOST_SUM_MAX;
+    }
     if (control->weak_ms != 0)
     {
         required_sum += TRACK_LOST_RECOVER_MARGIN;

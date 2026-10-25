@@ -17,6 +17,10 @@ static uint8_t store_fails, sample_ok=1, flash_valid;
 static unsigned store_calls;
 static unsigned sample_calls;
 static unsigned uart_calls;
+static unsigned oled_commands, oled_data_bytes, oled_positions;
+static uint8_t oled_on=1;
+static uint16_t oled_address;
+static uint8_t oled_ram[1024];
 static uint16_t fake_raw[4]={500,500,500,500};
 static char uart_line[512];
 void TrackHW_Stop(void) { hw_left=hw_right=hw_servo=0; }
@@ -32,8 +36,15 @@ uint8_t TrackStore_Save(const TrackParams *p) { ++store_calls;if(store_fails)ret
 TrackStoreError TrackStore_LastError(void) { return store_fails ? TRACK_STORE_ERASE : TRACK_STORE_OK; }
 uint8_t TrackUART_Queue(const char *s) { assert(strlen(s)<sizeof(uart_line));strcpy(uart_line,s);++uart_calls;return 1; }
 void Ms_Delay(uint16_t ms) { track_milliseconds+=ms; }
-void LCD_Set_Pos(uint8_t x,uint8_t y) {(void)x;(void)y;}
-void LCD_WrDat(uint8_t v) {(void)v;}
+void LCD_Set_Pos(uint8_t x,uint8_t y) { ++oled_positions;oled_address=(uint16_t)y*128+x; }
+void LCD_WrDat(uint8_t v) { ++oled_data_bytes;assert(oled_address<1024);oled_ram[oled_address++]=v; }
+void LCD_WrCmd(uint8_t command)
+{
+    ++oled_commands;
+    if(command==0xae){assert(!track_guard_armed);oled_on=0;}
+    else if(command==0xaf){assert(!hw_left && !hw_right);oled_on=1;}
+    else assert(0);
+}
 /* Include the real application: test its menu transitions, not a UI model. */
 #include "../USER/src/track_app.c"
 
@@ -68,9 +79,28 @@ static void enter(TrackMode target)
         handle_keys(KEY_OK_EVENT);
     }
 }
+/** @brief 停车后必须在完整新画面写入后亮屏；行驶状态不能调用此辅助函数。 */
+static void restore_display(void)
+{
+    unsigned n, bytes=oled_data_bytes, commands=oled_commands;
+    assert(mode!=TRACK_RUN && display_off && !oled_on);
+    for(n=0;n<127;n++)
+    {
+        display_task(TrackHW_Now());
+        assert(!oled_on);
+    }
+    display_task(TrackHW_Now());
+    assert(oled_on && !display_off && !display_busy);
+    assert(oled_data_bytes-bytes==1024 && oled_commands-commands==1);
+    assert(!memcmp(oled_ram,framebuffer,sizeof(oled_ram)));
+}
+
 static void dump_screen(const char *path)
 {
-    FILE *f;render_display();f=fopen(path,"wb");assert(f);
+    FILE *f;
+    if(mode==TRACK_RUN && display_off)memset(framebuffer,0,sizeof(framebuffer));
+    else render_display();
+    f=fopen(path,"wb");assert(f);
     assert(fwrite(framebuffer,1,1024,f)==1024);fclose(f);
 }
 
@@ -329,7 +359,20 @@ int main(void)
     assert(params.base_duty==before_restore.base_duty && params.curve_duty==before_restore.curve_duty && params.lost_sum==before_restore.lost_sum);
     assert(params.servo_left_sign==-1 && params.left_reverse && params.right_reverse);
     step();assert(!hw_left && !hw_right);handle_keys(KEY_LEFT_EVENT);
+    /* 发车前遗留的半帧刷新必须取消，行驶中所有 OLED 发送保持静默。 */
+    display_busy=1;display_cursor=16;
     enter(TRACK_RUN);step();assert(mode==TRACK_RUN && hw_left>0);
+    assert(display_off && !oled_on && !display_busy && !display_cursor);
+    {
+        unsigned commands=oled_commands, bytes=oled_data_bytes, positions=oled_positions;
+        memset(framebuffer,0xa5,sizeof(framebuffer));
+        for(n=0;n<20;n++)
+        {
+            track_milliseconds+=TRACK_PERIOD_MS;TrackApp_Task();
+        }
+        assert(oled_commands==commands && oled_data_bytes==bytes && oled_positions==positions);
+        for(n=0;n<sizeof(framebuffer);n++)assert(framebuffer[n]==0xa5);
+    }
     for(n=0;n<TRACK_DUTY_MAX/TRACK_MOTOR_RAMP+1;n++)step();assert(hw_left==params.base_duty && hw_right==params.base_duty);
     dump_screen("MDK/ui-run.bin");
     old=hw_servo;fake_raw[0]=fake_raw[1]=0;step();
@@ -337,10 +380,14 @@ int main(void)
     fake_raw[0]=850;fake_raw[1]=750;step();
     assert(mode==TRACK_RUN && control.signal_ok && !control.weak_ms);
     handle_keys(KEY_LEFT_EVENT|KEY_UP_EVENT);assert(mode==TRACK_MENU && !hw_left && !hw_servo);
+    restore_display();
     enter(TRACK_RUN);track_guard_trip=1;step();assert(mode==TRACK_MENU && fault==TRACK_TIMEOUT && !hw_servo);
+    restore_display();
     enter(TRACK_RUN);fake_raw[0]=fake_raw[1]=0;
     for(n=TRACK_PERIOD_MS;n<TRACK_ZERO_CONFIRM_MS;n+=TRACK_PERIOD_MS){step();assert(mode==TRACK_RUN);}
     step();assert(mode==TRACK_MENU && fault==TRACK_LOST && !hw_left && !hw_servo);
+    restore_display();dump_screen("MDK/ui-lost.bin");
+    puts("PASS: OLED power-off before run, no run-time draw/SPI, full-frame wake after LOST/manual/timeout");
     enter(TRACK_PID);step();assert(mode==TRACK_PID && !hw_left && !hw_servo);
     sample_ok=0;step();assert(mode==TRACK_MENU && fault==TRACK_ADC_ERROR);
     /* ADC fault during calibration must not allow a stale partial commit. */

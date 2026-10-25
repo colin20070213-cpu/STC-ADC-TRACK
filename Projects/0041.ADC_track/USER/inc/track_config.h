@@ -36,7 +36,7 @@
  * 中间引脚仅为占位：接车运行前必须按实际接线修改下面两个宏。 */
 #define TRACK_ADC_LEFT_PIN          ADC_P13
 #define TRACK_ADC_RIGHT_PIN         ADC_P01
-#define TRACK_ADC_MIDDLE_LEFT_PIN   ADC_P16 /* TODO：确认左纵电感实际引脚。 */
+#define TRACK_ADC_MIDDLE_LEFT_PIN   ADC_P10 /* TODO：确认左纵电感实际引脚。 */
 #define TRACK_ADC_MIDDLE_RIGHT_PIN  ADC_P05 /* TODO：确认右纵电感实际引脚。 */
 /* 论文 C4：Err=P*[A*(L-R)+B*(LM-RM)]/[A*(L+R)+C*abs(LM-RM)]。
  * A/B/C 使用相同整数权重，100 对应 1.00；P 使用千分比。
@@ -92,10 +92,11 @@
 #define TRACK_LOST_SUM_MIN     1U    /* 保存参数的合法下界；0 会使全零信号无法触发失线。 */
 #define TRACK_LOST_SUM_MAX     500U  /* 保存参数的合法上界，与代码初值分开定义。 */
 #define TRACK_LOST_SUM         40   /* 左右归一化总和低于此值进入弱信号确认。 */
-#define TRACK_HARD_LOST_EACH   15    /* 全部电感均低于此值，采用较短失线确认。 */
-#define TRACK_LOST_CONFIRM_MS  100U  /* 普通弱信号持续时间，按标称控制周期累计。 */
-#define TRACK_ZERO_CONFIRM_MS  50U   /* 全部电感同时近零持续时间，单位 ms。 */
-#define TRACK_LOST_RECOVER_MARGIN 50U /* 恢复需高于进入阈值，避免临界值反复切换。 */
+#define TRACK_RUN_LOST_SUM_MAX 20U  /* 仅运行时限制失线门槛；旧 EEPROM 较大值不会抵消本次放宽。 */
+#define TRACK_HARD_LOST_EACH   5    /* 全部电感均低于此值，采用较短失线确认。 */
+#define TRACK_LOST_CONFIRM_MS  250U  /* 普通弱信号持续时间，按标称控制周期累计。 */
+#define TRACK_ZERO_CONFIRM_MS  120U   /* 全部电感同时近零持续时间，单位 ms。 */
+#define TRACK_LOST_RECOVER_MARGIN 10U /* 恢复需高于进入阈值，避免临界值反复切换。 */
 #define TRACK_LOST_DUTY_MAX    600U  /* 确认期间保持转向，动力不超过 6%，且不加速。 */
 #define TRACK_CROSS_SUM        1500  /* 十字候选的总强度下限。 */
 #define TRACK_CROSS_ERROR      120   /* 十字进入前后允许的小偏差。 */
@@ -127,6 +128,9 @@
 #endif
 #if TRACK_LOST_SUM < TRACK_LOST_SUM_MIN || TRACK_LOST_SUM > TRACK_LOST_SUM_MAX
 #error TRACK_LOST_SUM is outside the valid parameter range
+#endif
+#if TRACK_RUN_LOST_SUM_MAX < TRACK_LOST_SUM_MIN || TRACK_RUN_LOST_SUM_MAX > TRACK_LOST_SUM_MAX
+#error Invalid run-only signal loss threshold cap
 #endif
 #if TRACK_ZERO_CONFIRM_MS < TRACK_PERIOD_MS || TRACK_LOST_CONFIRM_MS < TRACK_ZERO_CONFIRM_MS
 #error Invalid signal loss confirmation times
