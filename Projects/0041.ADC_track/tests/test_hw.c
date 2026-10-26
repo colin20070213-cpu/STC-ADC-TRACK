@@ -111,7 +111,7 @@ int main(void)
 {
     uint16_t values[4],count;uint8_t direction;uint32_t stamp;unsigned n;char chunk[101];
     TrackHW_Init();assert(!(PWMA_ENO&0x55) && !(PWMB_ENO&1) && P60 && P62 && P64 && P66 && !P74);
-    assert(configured_baud==9600UL && EADC && !PADC && !PADCH);
+    assert(configured_baud==115200UL && EADC && !PADC && !PADCH);
     assert(!TrackHW_EncoderSample(&count,&direction,&stamp)); /* 首次 1ms tick 前未就绪。 */
     assert(!TrackHW_Sample(values)); /* 未完成首帧时立即返回，不等待。 */
     for(n=0;n<100;n++) {

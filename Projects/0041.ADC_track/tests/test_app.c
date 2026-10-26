@@ -181,7 +181,7 @@ static void telemetry_tests(void)
     speed_control.output=4000;encoder_direction=1;
     telemetry_task(0xffffffffUL);
     assert(strlen(uart_line)*10000UL <= TRACK_UART_BAUD*TRACK_TELEMETRY_MS*4UL/5UL);
-    printf("PASS: 52-column telemetry, explicit target/feedback and 9600-baud budget (%u bytes/frame)\n",(unsigned)strlen(uart_line));
+    printf("PASS: 52-column telemetry, explicit target/feedback and configured UART budget (%u bytes/frame)\n",(unsigned)strlen(uart_line));
 
     mode=TRACK_SPEED_PID;uart_snapshot_pending=0;before=uart_calls;
     telemetry_task(last_telemetry+TRACK_TELEMETRY_MS);

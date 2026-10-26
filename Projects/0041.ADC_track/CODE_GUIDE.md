@@ -49,7 +49,7 @@ PID 输出为相对机械中值的偏移。核心层根据左右限位换算偏�
 原始小信号仍映射到 0～1000；`ratio_per_mille()` 用十轮商余递推计算归一化千分比，四路误差用 `four_sensor_terms()` 构造论文分子分母，再由 `divide_capped1000()` 做有界长除并恢复符号，`center_average()` 显式求有符号均值，避免这些路径依赖目标芯片的 32 位乘除库。
 `TrackSensors_MathCheck()` 在实际固件上电时执行；失败置 `TRACK_MATH_ERROR`，不能进入依赖电感计算的执行模式。不要通过把 E 固定为零或强行删除数学库来掩盖错误。
 保留本车已有符号约定：普通循迹时 PID 误差为“反馈减目标”，最终乘舵机方向。十字策略处理后的误差保存在 `control.error`，原始位置反馈可独立读取。
-蓝牙 CSV 保留原有 39 列（含 `target1000`、`feedback1000`），末尾追加 `adcFrames`、`adcOverruns`，后续追加速度 11 列，共 52 列。UART 默认 9600 / 8N1，完整遥测为 500ms 一帧，PID 计算仍为 2ms 一次。
+蓝牙 CSV 保留原有 39 列（含 `target1000`、`feedback1000`），末尾追加 `adcFrames`、`adcOverruns`，后续追加速度 11 列，共 52 列。UART 默认 115200 / 8N1，完整遥测为 500ms 一帧，PID 计算仍为 2ms 一次。
 
 ## 自己在代码里调 PID
 
