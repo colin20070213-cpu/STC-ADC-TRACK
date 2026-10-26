@@ -35,10 +35,25 @@ void TrackParams_RestoreSpeedPID(TrackParams *params)
     params->speed_kd100 = (uint16_t)(TRACK_SPEED_DEFAULT_KD * 100.0f + 0.5f);
 }
 
+void TrackParams_RestoreC4(TrackParams *params)
+{
+    params->c4_a = TRACK_FOUR_WEIGHT_A;
+    params->c4_b = TRACK_FOUR_WEIGHT_B;
+    params->c4_c = TRACK_FOUR_WEIGHT_C;
+}
+
+/** @brief C4 运行时边界与宏初值边界一致，保证 32 位分子缩放不溢出。 */
+static uint8_t c4_weights_valid(const TrackParams *params)
+{
+    return params->c4_a >= 1 && params->c4_a <= TRACK_FOUR_WEIGHT_MAX &&
+           params->c4_b <= TRACK_FOUR_WEIGHT_MAX && params->c4_c <= TRACK_FOUR_WEIGHT_MAX;
+}
+
 void TrackParams_Default(TrackParams *params)
 {
     TrackParams_RestorePID(params);
     TrackParams_RestoreSpeedPID(params);
+    TrackParams_RestoreC4(params);
     params->speed_base = TRACK_SPEED_BASE_DEFAULT;
     params->speed_curve = TRACK_SPEED_CURVE_DEFAULT;
     params->center = TRACK_SERVO_DEFAULT_CENTER;
@@ -56,6 +71,7 @@ void TrackParams_Default(TrackParams *params)
 
 uint8_t TrackParams_Valid(const TrackParams *params)
 {
+    if (!c4_weights_valid(params)) return 0;
     if (params->speed_base > TRACK_SPEED_TARGET_MAX || params->speed_curve > params->speed_base ||
         params->speed_kp100 > TRACK_SPEED_GAIN_MAX_X100 ||
         params->speed_ki100 > TRACK_SPEED_GAIN_MAX_X100 || params->speed_kd100 > TRACK_SPEED_GAIN_MAX_X100)
@@ -297,8 +313,35 @@ void TrackSensors_Strength(const TrackSensors *sensors, uint16_t *left, uint16_t
 }
 
 #if TRACK_SENSOR_COUNT == 4
+/** @brief 用四个 8 位分块乘积构造精确 16×16→32 结果，避免依赖 32 位乘法库。
+ *  @note 每个局部乘积最多 65025，显式无符号 16 位计算不会溢出。
+ */
+static uint32_t c4_weight_product(uint16_t value, uint16_t weight)
+{
+    uint16_t value_low = value & 0xffU;
+    uint16_t value_high = value >> 8;
+    uint16_t weight_low = weight & 0xffU;
+    uint16_t weight_high = weight >> 8;
+    uint16_t low = value_low * weight_low;
+    uint16_t middle_first = value_low * weight_high;
+    uint16_t middle_second = value_high * weight_low;
+    uint16_t high = value_high * weight_high;
+
+    return (uint32_t)low + ((uint32_t)middle_first << 8) +
+           ((uint32_t)middle_second << 8) + ((uint32_t)high << 16);
+}
+
+/** @brief 给差值乘非负权重，先算幅值再恢复符号。 */
+static int32_t c4_signed_weight(int16_t difference, uint16_t weight)
+{
+    uint16_t magnitude = difference < 0 ? -difference : difference;
+    int32_t result = (int32_t)c4_weight_product(magnitude, weight);
+
+    return difference < 0 ? -result : result;
+}
+
 /** @brief 论文 C4 分子/分母；整数权重同标度，分母保留纵电感差的绝对值。 */
-static void four_sensor_terms(const TrackSensors *sensors, int32_t *numerator,
+static void four_sensor_terms(const TrackSensors *sensors, const TrackParams *params, int32_t *numerator,
                               uint32_t *denominator)
 {
     int16_t horizontal_difference = (int16_t)sensor_signal(sensors, 0) -
@@ -309,10 +352,10 @@ static void four_sensor_terms(const TrackSensors *sensors, int32_t *numerator,
     uint16_t vertical_magnitude = vertical_difference < 0 ?
                                  -vertical_difference : vertical_difference;
 
-    *numerator = (int32_t)horizontal_difference * TRACK_FOUR_WEIGHT_A +
-                 (int32_t)vertical_difference * TRACK_FOUR_WEIGHT_B;
-    *denominator = (uint32_t)horizontal_sum * TRACK_FOUR_WEIGHT_A +
-                   (uint32_t)vertical_magnitude * TRACK_FOUR_WEIGHT_C;
+    *numerator = c4_signed_weight(horizontal_difference, params->c4_a) +
+                 c4_signed_weight(vertical_difference, params->c4_b);
+    *denominator = c4_weight_product(horizontal_sum, params->c4_a) +
+                   c4_weight_product(vertical_magnitude, params->c4_c);
 }
 
 /** @brief 无乘除库的 32 位长除，结果限幅到 1000；固定执行 32 轮。 */
@@ -339,15 +382,17 @@ static uint16_t divide_capped1000(uint32_t numerator, uint32_t denominator)
 }
 #endif
 
-uint8_t TrackSensors_SteeringValid(const TrackSensors *sensors)
+uint8_t TrackSensors_SteeringValid(const TrackSensors *sensors, const TrackParams *params)
 {
 #if TRACK_SENSOR_COUNT == 4
     int32_t numerator;
     uint32_t denominator;
 
-    four_sensor_terms(sensors, &numerator, &denominator);
-    return denominator >= (uint32_t)TRACK_FOUR_DEN_MIN * TRACK_FOUR_WEIGHT_A;
+    if (!c4_weights_valid(params)) return 0;
+    four_sensor_terms(sensors, params, &numerator, &denominator);
+    return denominator >= (uint32_t)TRACK_FOUR_DEN_MIN * params->c4_a;
 #else
+    (void)params;
     return sensor_signal(sensors, 0) + sensor_signal(sensors, 1) != 0;
 #endif
 }
@@ -378,7 +423,7 @@ static int16_t two_sensor_error(const TrackSensors *sensors)
 
 #endif
 
-int16_t TrackSensors_Error(const TrackSensors *sensors)
+int16_t TrackSensors_Error(const TrackSensors *sensors, const TrackParams *params)
 {
 #if TRACK_SENSOR_COUNT == 4
     int32_t numerator;
@@ -386,8 +431,9 @@ int16_t TrackSensors_Error(const TrackSensors *sensors)
     uint32_t magnitude;
     int16_t error;
 
-    four_sensor_terms(sensors, &numerator, &denominator);
-    if (denominator < (uint32_t)TRACK_FOUR_DEN_MIN * TRACK_FOUR_WEIGHT_A)
+    if (!c4_weights_valid(params)) return 0;
+    four_sensor_terms(sensors, params, &numerator, &denominator);
+    if (denominator < (uint32_t)TRACK_FOUR_DEN_MIN * params->c4_a)
     {
         return 0; /* 低分母不作为有效反馈，运行状态会进入限速失线确认。 */
     }
@@ -400,13 +446,14 @@ int16_t TrackSensors_Error(const TrackSensors *sensors)
     }
     return TRACK_ERROR_SIGN == 1 ? error : -error;
 #else
+    (void)params;
     return two_sensor_error(sensors);
 #endif
 }
 
-int16_t TrackSensors_Feedback(const TrackSensors *sensors)
+int16_t TrackSensors_Feedback(const TrackSensors *sensors, const TrackParams *params)
 {
-    int32_t feedback = TrackSensors_Error(sensors);
+    int32_t feedback = TrackSensors_Error(sensors, params);
 
     if (sensors->center_valid)
     {
@@ -418,6 +465,7 @@ int16_t TrackSensors_Feedback(const TrackSensors *sensors)
 uint8_t TrackSensors_MathCheck(void)
 {
     TrackSensors probe;
+    TrackParams params;
 #if TRACK_SENSOR_COUNT == 4
     const int16_t horizontal_200 = (int16_t)(200UL * TRACK_FOUR_SCALE1000 / 1000UL);
     const int16_t horizontal_20 = (int16_t)(20UL * TRACK_FOUR_SCALE1000 / 1000UL);
@@ -426,6 +474,7 @@ uint8_t TrackSensors_MathCheck(void)
     const int16_t horizontal_20 = 20;
 #endif
 
+    TrackParams_Default(&params);
     memset(&probe, 0, sizeof(probe));
     if (TrackNormalize(40, 0, 80) != 500 || TrackNormalize(5, 0, 10) != 500 ||
         TrackNormalize(20, 0, 80) != 250 || TrackNormalize(60, 0, 80) != 750)
@@ -434,17 +483,19 @@ uint8_t TrackSensors_MathCheck(void)
     }
     probe.norm[0] = 600;
     probe.norm[1] = 400;
-    if (TrackSensors_Error(&probe) != TRACK_ERROR_SIGN * horizontal_200)
+    if (TrackSensors_Error(&probe, &params) != TRACK_ERROR_SIGN * horizontal_200)
     {
         return 0;
     }
     probe.norm[0] = 400;
     probe.norm[1] = 600;
-    if (TrackSensors_Error(&probe) != TRACK_ERROR_SIGN * -horizontal_200)
+    if (TrackSensors_Error(&probe, &params) != TRACK_ERROR_SIGN * -horizontal_200)
     {
         return 0;
     }
 #if TRACK_SENSOR_COUNT == 4
+    if (c4_weight_product(2000U, 1000U) != 2000000UL ||
+        c4_signed_weight(-1000, 1000U) != -1000000L) return 0;
     probe.norm[0] = 500;
     probe.norm[1] = 500;
     probe.norm[2] = 600;
@@ -456,13 +507,13 @@ uint8_t TrackSensors_MathCheck(void)
                                     ((uint32_t)1000 * TRACK_FOUR_WEIGHT_A +
                                      (uint32_t)500 * TRACK_FOUR_WEIGHT_C));
         int16_t expected = expected_value > 1000UL ? 1000 : (int16_t)expected_value;
-        if (TrackSensors_Error(&probe) != TRACK_ERROR_SIGN * expected)
+        if (TrackSensors_Error(&probe, &params) != TRACK_ERROR_SIGN * expected)
         {
             return 0;
         }
         probe.norm[2] = 100;
         probe.norm[3] = 600;
-        if (TrackSensors_Error(&probe) != TRACK_ERROR_SIGN * -expected)
+        if (TrackSensors_Error(&probe, &params) != TRACK_ERROR_SIGN * -expected)
         {
             return 0;
         }
@@ -472,9 +523,20 @@ uint8_t TrackSensors_MathCheck(void)
 #endif
     probe.norm[0] = 510;
     probe.norm[1] = 490;
-    return TrackSensors_Error(&probe) == TRACK_ERROR_SIGN * horizontal_20 &&
+    return TrackSensors_Error(&probe, &params) == TRACK_ERROR_SIGN * horizontal_20 &&
            center_average((int32_t)TRACK_BODY_SAMPLES * 200L) == 200 &&
            center_average((int32_t)TRACK_BODY_SAMPLES * -200L) == -200;
+}
+
+void TrackBodyCenter_Invalidate(TrackSensors *sensors)
+{
+    sensors->center_valid = 0;
+    sensors->center_bias = 0;
+    sensors->center_samples = 0;
+    sensors->center_sum = 0;
+    sensors->center_min = 0;
+    sensors->center_max = 0;
+    sensors->center_status = TRACK_BODY_IDLE;
 }
 
 void TrackBodyCenter_Begin(TrackSensors *sensors)
@@ -510,7 +572,7 @@ void TrackBodyCenter_Sample(TrackSensors *sensors, const TrackParams *params)
         sensors->center_status = TRACK_BODY_WEAK;
         return;
     }
-    measured_error = TrackSensors_Error(sensors);
+    measured_error = TrackSensors_Error(sensors, params);
     if (measured_error < -TRACK_BODY_MAX_BIAS || measured_error > TRACK_BODY_MAX_BIAS)
     {
         sensors->center_status = TRACK_BODY_OFFSET;
@@ -694,7 +756,7 @@ TrackFault TrackControl_Step(TrackControl *control, const TrackSensors *sensors,
     {
         required_sum += TRACK_LOST_RECOVER_MARGIN;
     }
-    if (signal_sum < required_sum || !TrackSensors_SteeringValid(sensors))
+    if (signal_sum < required_sum || !TrackSensors_SteeringValid(sensors, params))
     {
         return hold_weak_signal(control, params, left_signal, right_signal, drive);
     }
@@ -703,7 +765,7 @@ TrackFault TrackControl_Step(TrackControl *control, const TrackSensors *sensors,
     control->zero_ms = 0;
 
     /* 沿用本车纠偏符号：误差 = 位置反馈 - 目标，再由舵机方向决定输出符号。 */
-    error = clamp16((int32_t)TrackSensors_Feedback(sensors) -
+    error = clamp16((int32_t)TrackSensors_Feedback(sensors, params) -
                     TRACK_STEERING_TARGET1000, -1000, 1000);
     /* 十字候选仍只看外侧横电感，避免纵电感增强单独触发直行压制。 */
     control->error = update_crossing(control,

@@ -54,7 +54,7 @@ typedef enum
     LABEL_CAL_GROUP, LABEL_SERVO_GROUP, LABEL_MOTOR_GROUP,
     LABEL_SERVO_DIRECTION, LABEL_LEFT_DIRECTION, LABEL_RIGHT_DIRECTION,
     LABEL_NORMAL, LABEL_REVERSED, LABEL_SPEED_PID, LABEL_PWM_LIMIT,
-    LABEL_STEERING_TUNE, LABEL_SPEED_TUNE
+    LABEL_STEERING_TUNE, LABEL_SPEED_TUNE, LABEL_C4_TUNE, LABEL_C4_RESTORE
 } UILabel;
 
 typedef struct
@@ -82,7 +82,8 @@ static const MenuEntry servo_menu[] =
 static const MenuEntry pid_menu[] =
 {
     {LABEL_STEERING_TUNE, TRACK_PID},
-    {LABEL_SPEED_TUNE, TRACK_SPEED_PID}
+    {LABEL_SPEED_TUNE, TRACK_SPEED_PID},
+    {LABEL_C4_TUNE, TRACK_C4_TUNE}
 };
 static const MenuEntry motor_menu[] =
 {
@@ -199,7 +200,7 @@ static uint8_t menu_count(void)
         case MENU_CALIBRATION: return 2;
         case MENU_SERVO:       return 4;
         case MENU_MOTOR:       return 4;
-        case MENU_PID:         return 2;
+        case MENU_PID:         return TRACK_SENSOR_COUNT == 4 ? 3 : 2;
         default:               return ROOT_ITEM_COUNT;
     }
 }
@@ -261,6 +262,7 @@ static uint8_t mode_label(void)
         case TRACK_SPEED:           return LABEL_PWM_LIMIT;
         case TRACK_SPEED_TARGET:    return LABEL_SPEED;
         case TRACK_SPEED_PID:       return LABEL_SPEED_PID;
+        case TRACK_C4_TUNE:         return LABEL_C4_TUNE;
         case TRACK_SERVO_DIRECTION: return LABEL_SERVO_DIRECTION;
         case TRACK_LEFT_DIRECTION:  return LABEL_LEFT_DIRECTION;
         case TRACK_RIGHT_DIRECTION: return LABEL_RIGHT_DIRECTION;
@@ -393,7 +395,7 @@ static void render_body_center(void)
     }
     sprintf(text_line, "L:%4u R:%4u", (unsigned int)sensors.norm[0], (unsigned int)sensors.norm[1]);
     text_at(0, 2, text_line);
-    sprintf(text_line, "E:%5d REF:%5d", (int)TrackSensors_Error(&sensors), (int)sensors.center_bias);
+    sprintf(text_line, "E:%5d REF:%5d", (int)TrackSensors_Error(&sensors, &params), (int)sensors.center_bias);
     text_at(0, 3, text_line);
     sprintf(text_line, "N:%u/%u %s", sensors.center_samples, (unsigned int)TRACK_BODY_SAMPLES,
             sensors.center_valid ? "VALID" : "UNSET");
@@ -475,6 +477,39 @@ static void render_pid(void)
     text_at(0, 6, text_line);
     text_at(0, 7, message[0] ? message :
             (editing ? "OK:save <:undo >:step" : "^v:pick >:edit <:back"));
+}
+
+/** @brief C4 权重静态预览；编辑与保存均不输出电机或舵机脉冲。 */
+static void render_c4(void)
+{
+    TrackParams preview;
+    uint8_t item;
+    uint16_t value;
+    uint8_t restoring = pid_item == PID_ITEM_RESTORE;
+
+    preview = params;
+    if (restoring && !editing) TrackParams_RestoreC4(&preview);
+    sprintf(text_line, "%u/4", (unsigned int)pid_item + 1);
+    text_at(104, 1, text_line);
+    if (restoring) label_at(0, 2, LABEL_C4_RESTORE);
+    else text_at(0, 2, "MOTOR/SERVO OFF");
+    for (item = 0; item < 3; ++item)
+    {
+        value = item == 0 ? preview.c4_a : item == 1 ? preview.c4_b : preview.c4_c;
+        sprintf(text_line, "%c%c:%2u.%02u %s", !restoring && pid_item == item ? '>' : ' ',
+                'A' + item, value / 100, value % 100,
+                !restoring && editing && pid_item == item ? (coarse_step ? "EDIT .10" : "EDIT .01") : "");
+        text_at(0, (uint8_t)(item + (restoring ? 4 : 3)), text_line);
+    }
+    if (!restoring)
+    {
+        sprintf(text_line, "E:%d%s%s", (int)TrackSensors_Error(&sensors, &params),
+                sensors.valid ? "" : " NEED CAL", params_dirty() ? " *" : "");
+        text_at(0, 6, text_line);
+    }
+    text_at(0, 7, message[0] ? message : (restoring ?
+            (editing ? "OK:save <:undo" : "OK:preview ^v:pick") :
+            (editing ? "OK:save <:undo >:step" : "^v:pick >:edit <:back")));
 }
 
 /** @brief 速度页的百分比来自 PWM，不表示实测轮速；编辑期间输出保持关闭。 */
@@ -592,6 +627,7 @@ static void render_display(void)
         case TRACK_CAL:         render_sensor_calibration(); break;
         case TRACK_PID:
         case TRACK_SPEED_PID:   render_pid(); break;
+        case TRACK_C4_TUNE:     render_c4(); break;
         case TRACK_RUN:         render_run(); break;
         case TRACK_BODY_CENTER: render_body_center(); break;
         case TRACK_SPEED:
@@ -677,6 +713,7 @@ static void return_menu(TrackFault reason)
 static uint8_t save_params(void)
 {
     uint8_t stored;
+    uint8_t c4_changed;
 
     TrackHW_Arm(0);
     stored = TrackStore_Save(&params);
@@ -695,11 +732,14 @@ static uint8_t save_params(void)
         }
         return 0;
     }
+    c4_changed = params.c4_a != entry_params.c4_a || params.c4_b != entry_params.c4_b ||
+                 params.c4_c != entry_params.c4_c;
+    if (c4_changed) TrackBodyCenter_Invalidate(&sensors);
     saved_params = params;
     entry_params = params;
     defaults_loaded = 0;
     TrackHW_SetMotorDirections(params.left_reverse, params.right_reverse);
-    set_message("SAVED OK");
+    set_message(c4_changed ? "SAVED OK: NEED CENTER" : "SAVED OK");
     return 1;
 }
 
@@ -814,6 +854,7 @@ static void enter_menu_item(void)
             speed_item = 0;
             break;
         case TRACK_SPEED_PID:
+        case TRACK_C4_TUNE:
             mode = target;
             pid_item = 0;
             break;
@@ -839,7 +880,12 @@ static void adjust_param(int8_t direction)
 
     candidate = params;
     step = coarse_step ? 10 : 1;
-    if (mode == TRACK_SPEED_PID)
+    if (mode == TRACK_C4_TUNE)
+    {
+        selected_value = pid_item == 0 ? &candidate.c4_a :
+                         pid_item == 1 ? &candidate.c4_b : &candidate.c4_c;
+    }
+    else if (mode == TRACK_SPEED_PID)
     {
         selected_value = pid_item == 0 ? &candidate.speed_kp100 :
                          pid_item == 1 ? &candidate.speed_ki100 : &candidate.speed_kd100;
@@ -898,11 +944,12 @@ static void preview_pid_defaults(void)
     TrackParams candidate;
 
     candidate = params;
-    if (mode == TRACK_SPEED_PID) TrackParams_RestoreSpeedPID(&candidate);
+    if (mode == TRACK_C4_TUNE) TrackParams_RestoreC4(&candidate);
+    else if (mode == TRACK_SPEED_PID) TrackParams_RestoreSpeedPID(&candidate);
     else TrackParams_RestorePID(&candidate);
     if (!TrackParams_Valid(&candidate))
     {
-        set_message("PID DEFAULT INVALID");
+        set_message("DEFAULT INVALID");
         return;
     }
     begin_edit();
@@ -1244,7 +1291,8 @@ static void handle_keys(uint8_t keys)
         case TRACK_CAL:         handle_calibration_keys(keys); break;
         case TRACK_BODY_CENTER: handle_body_keys(keys); break;
         case TRACK_PID:
-        case TRACK_SPEED_PID:   handle_pid_keys(keys); break;
+        case TRACK_SPEED_PID:
+        case TRACK_C4_TUNE:     handle_pid_keys(keys); break;
         case TRACK_SPEED:
         case TRACK_SPEED_TARGET: handle_speed_keys(keys); break;
         case TRACK_SERVO_DIRECTION:
@@ -1340,7 +1388,7 @@ static void control_task(void)
         TrackBodyCenter_Sample(&sensors, &params);
         return;
     }
-    if (mode == TRACK_SPEED || mode == TRACK_SPEED_TARGET || mode == TRACK_SPEED_PID || is_direction_mode())
+    if (mode == TRACK_SPEED || mode == TRACK_SPEED_TARGET || mode == TRACK_SPEED_PID || mode == TRACK_C4_TUNE || is_direction_mode())
     {
         TrackHW_Stop();
         return;
@@ -1434,7 +1482,7 @@ static void telemetry_task(uint32_t now)
     if ((uint32_t)(now - last_telemetry) < TRACK_TELEMETRY_MS) return;
 #endif
     sprintf(telemetry, "%d,%d,%ld,%ld\r\n",
-            (int)TRACK_STEERING_TARGET1000, TrackSensors_Feedback(&sensors),
+            (int)TRACK_STEERING_TARGET1000, TrackSensors_Feedback(&sensors, &params),
             (long)(speed_control.target * 100.0f),
             (long)(speed_control.feedback * 100.0f));
     if (TrackUART_Queue(telemetry)) last_telemetry = now;

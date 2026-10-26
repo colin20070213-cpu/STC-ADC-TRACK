@@ -39,8 +39,9 @@
 #define TRACK_ADC_MIDDLE_LEFT_PIN   ADC_P10 /* TODO：确认左纵电感实际引脚。 */
 #define TRACK_ADC_MIDDLE_RIGHT_PIN  ADC_P05 /* TODO：确认右纵电感实际引脚。 */
 /* 论文 C4：Err=P*[A*(L-R)+B*(LM-RM)]/[A*(L+R)+C*abs(LM-RM)]。
- * A/B/C 使用相同整数权重，100 对应 1.00；P 使用千分比。
+ * A/B/C 使用相同整数权重，100 对应 1.00；宏只作初值，菜单保存值优先。P 使用千分比。
  * 这些是待实车整定的起点，独立于舵机 PID 的 Kp/Ki/Kd。 */
+#define TRACK_FOUR_WEIGHT_MAX      1000U /* A:0.01~10.00，B/C:0.00~10.00。 */
 #define TRACK_FOUR_WEIGHT_A        100U
 #define TRACK_FOUR_WEIGHT_B        100U
 #define TRACK_FOUR_WEIGHT_C        100U
@@ -98,10 +99,10 @@
 #define TRACK_SPEED_CURVE_DEFAULT   0U
 #define TRACK_SPEED_TARGET_MAX      1000U
 #ifndef TRACK_SPEED_DEFAULT_KP
-#define TRACK_SPEED_DEFAULT_KP      30.00f
+#define TRACK_SPEED_DEFAULT_KP      300.00f
 #endif
 #ifndef TRACK_SPEED_DEFAULT_KI
-#define TRACK_SPEED_DEFAULT_KI      30.00f
+#define TRACK_SPEED_DEFAULT_KI      0.00f
 #endif
 #ifndef TRACK_SPEED_DEFAULT_KD
 #define TRACK_SPEED_DEFAULT_KD       0.00f
@@ -150,7 +151,10 @@
 #if TRACK_ADC_FRAME_MS != 1 || TRACK_ADC_STALE_MS < 2
 #error ADC scanner requires a 1ms frame and at least 2ms freshness limit
 #endif
-#if TRACK_FOUR_WEIGHT_A < 1 || TRACK_FOUR_WEIGHT_A > 1000 || TRACK_FOUR_WEIGHT_B > 1000 || TRACK_FOUR_WEIGHT_C > 1000
+#if TRACK_FOUR_WEIGHT_MAX < 1 || TRACK_FOUR_WEIGHT_MAX > 1000
+#error C4 runtime weight limit must stay within the 32-bit arithmetic bounds
+#endif
+#if TRACK_FOUR_WEIGHT_A < 1 || TRACK_FOUR_WEIGHT_A > TRACK_FOUR_WEIGHT_MAX || TRACK_FOUR_WEIGHT_B > TRACK_FOUR_WEIGHT_MAX || TRACK_FOUR_WEIGHT_C > TRACK_FOUR_WEIGHT_MAX
 #error Four sensor weights must be integers from 0 to 1000 with A positive
 #endif
 #if TRACK_FOUR_SCALE1000 < 1 || TRACK_FOUR_SCALE1000 > 2000 || TRACK_FOUR_DEN_MIN < 1 || TRACK_FOUR_DEN_MIN > 1000

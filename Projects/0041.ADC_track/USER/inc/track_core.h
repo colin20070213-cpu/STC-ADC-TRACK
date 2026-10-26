@@ -27,10 +27,11 @@ typedef enum
     TRACK_LEFT_DIRECTION,
     TRACK_RIGHT_DIRECTION,
     TRACK_SPEED_TARGET,
-    TRACK_SPEED_PID
+    TRACK_SPEED_PID,
+    TRACK_C4_TUNE
 } TrackMode;
 
-/** @brief 停车/启动失败原因，与串口 fault 字段对应。 */
+/** @brief 停车/启动失败原因，在故障菜单中显示，串口仍只发送四列目标/反馈。 */
 typedef enum
 {
     TRACK_OK = 0,
@@ -59,7 +60,7 @@ typedef enum
     TRACK_BODY_ADC
 } TrackBodyStatus;
 
-/** @brief 可断电保存的参数；字段顺序不等于 Flash 字节顺序，序列化由 core 完成。 */
+/** @brief 可断电保存的参数；字段顺序不等于 Flash 字节顺序，基础记录由 core、速度/C4 扩展由 store 明确序列化。 */
 typedef struct
 {
     uint16_t kp100;      /**< Kp ×100，例如 4000 对应 40.00。 */
@@ -79,6 +80,9 @@ typedef struct
     uint16_t speed_kp100;    /**< 独立速度环 Kp ×100。 */
     uint16_t speed_ki100;    /**< 独立速度环 Ki ×100。 */
     uint16_t speed_kd100;    /**< 独立速度环 Kd ×100，默认 0。 */
+    uint16_t c4_a;           /**< 横电感权重 A ×100，1~1000，100 对应 1.00。 */
+    uint16_t c4_b;           /**< 纵电感分子权重 B ×100，0~1000。 */
+    uint16_t c4_c;           /**< 纵电感分母权重 C ×100，0~1000。 */
 } TrackParams;
 
 /** @brief 电感测量、极值标定及车身参考，全部仅保存在 RAM。 */
@@ -98,7 +102,7 @@ typedef struct
     int16_t center_max;                   /**< 本次静态采集的最大偏差。 */
     int32_t center_sum;                   /**< 有符号偏差累计，用于计算均值。 */
     uint16_t center_samples;              /**< 本次居中采集的有效帧数。 */
-    uint8_t center_valid;                 /**< 当前极值下的居中参考是否有效。 */
+    uint8_t center_valid;                 /**< 当前极值和 C4 权重下的居中参考是否有效。 */
     uint8_t center_status;                /**< 取值见 TrackBodyStatus。 */
 } TrackSensors;
 
@@ -132,6 +136,8 @@ void TrackParams_Default(TrackParams *params);
 void TrackParams_RestorePID(TrackParams *params);
 /** @brief 只恢复速度环三项增益，不改速度目标和原转向参数。 */
 void TrackParams_RestoreSpeedPID(TrackParams *params);
+/** @brief 只恢复 C4 的 A/B/C 宏初值，不改变两套 PID、舵机和速度。 */
+void TrackParams_RestoreC4(TrackParams *params);
 
 /**
  * @brief 修改舵机方向并交换左右限位标签，保持中值和实际脉宽范围不变。
@@ -157,15 +163,17 @@ uint16_t TrackNormalize(uint16_t value, uint16_t low, uint16_t high);
 /** @brief 获取左右有效强度；四路时每侧取横/纵较强值，双路时取原值。 */
 void TrackSensors_Strength(const TrackSensors *sensors, uint16_t *left, uint16_t *right);
 /** @brief 是否有可用于转向的有效分母；强度和有效性必须同时满足。 */
-uint8_t TrackSensors_SteeringValid(const TrackSensors *sensors);
+uint8_t TrackSensors_SteeringValid(const TrackSensors *sensors, const TrackParams *params);
 /** @brief 未居中补偿的误差 ×1000；四路使用论文 C4，双路保留差比和。 */
-int16_t TrackSensors_Error(const TrackSensors *sensors);
+int16_t TrackSensors_Error(const TrackSensors *sensors, const TrackParams *params);
 /** @brief PID 位置反馈 ×1000：差比和减去有效居中参考，限幅到 -1000～1000。
  *  @note 这是电感估计的横向偏差，不是舵机实测角度；十字处理不会覆盖此值。
  */
-int16_t TrackSensors_Feedback(const TrackSensors *sensors);
+int16_t TrackSensors_Feedback(const TrackSensors *sensors, const TrackParams *params);
 /** @brief 上电检查实际编译的归一化、正负差比和与有符号均值，成功为 1。 */
 uint8_t TrackSensors_MathCheck(void);
+/** @brief C4 权重等测量规则变化后清除居中参考，保留原电感极值标定。 */
+void TrackBodyCenter_Invalidate(TrackSensors *sensors);
 /** @brief 启动一次居中采集，不清除旧参考。 */
 void TrackBodyCenter_Begin(TrackSensors *sensors);
 /** @brief 检查并纳入居中样本；弱信号、晃动、偏离或饱和即中止。 */

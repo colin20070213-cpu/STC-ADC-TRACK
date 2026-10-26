@@ -111,18 +111,18 @@ static void body_center_tests(void)
     assert(!TrackBodyCenter_Commit(&s) && !s.center_valid);
     TrackBodyCenter_Sample(&s,&p);
     assert(TrackBodyCenter_Commit(&s) && s.center_valid && s.center_bias==200);
-    assert(TrackSensors_Feedback(&s)==0);
+    assert(TrackSensors_Feedback(&s, &p)==0);
     TrackControl_Reset(&c,&p);TrackControl_Step(&c,&s,&p,0);
     assert(c.error==0 && c.servo==p.center);
     s.norm[0]=650;s.norm[1]=350;TrackControl_Step(&c,&s,&p,0);assert(c.error==100);
-    assert(TrackSensors_Feedback(&s)==100);
+    assert(TrackSensors_Feedback(&s, &p)==100);
     s.norm[0]=400;s.norm[1]=600;
     TrackBodyCenter_Begin(&s);
     for(n=0;n<TRACK_BODY_SAMPLES;n++)TrackBodyCenter_Sample(&s,&p);
     assert(TrackBodyCenter_Commit(&s) && s.center_bias==-200);
     TrackControl_Reset(&c,&p);TrackControl_Step(&c,&s,&p,0);assert(c.error==0);
     s.norm[0]=1000;s.norm[1]=0;TrackControl_Step(&c,&s,&p,0);assert(c.error==1000);
-    assert(TrackSensors_Feedback(&s)==1000);
+    assert(TrackSensors_Feedback(&s, &p)==1000);
     bias=s.center_bias;
     TrackBodyCenter_Begin(&s);s.norm[0]=s.norm[1]=20;TrackBodyCenter_Sample(&s,&p);
     assert(s.center_status==TRACK_BODY_WEAK && !TrackBodyCenter_Commit(&s));
@@ -197,16 +197,16 @@ static void low_signal_tests(void)
             assert(sensors.norm[0]==left*1000U/80 && sensors.norm[1]==right*1000U/80);
             expected=sensors.norm[0]+sensors.norm[1];
             if(expected)expected=((int32_t)sensors.norm[0]-sensors.norm[1])*1000L/expected;
-            actual=TrackSensors_Error(&sensors);
+            actual=TrackSensors_Error(&sensors, &params);
             assert(actual==expected && actual>=-1000 && actual<=1000);
             if(actual && actual!=-1000 && actual!=1000)++intermediate;
         }
     }
     assert(intermediate>1000);
     raw[0]=40;raw[1]=20;TrackSensors_Update(&sensors,raw);
-    assert(TrackSensors_Error(&sensors)==333);
+    assert(TrackSensors_Error(&sensors, &params)==333);
     raw[0]=20;raw[1]=40;TrackSensors_Update(&sensors,raw);
-    assert(TrackSensors_Error(&sensors)==-333);
+    assert(TrackSensors_Error(&sensors, &params)==-333);
 
     /* 低幅度算术覆盖仍保留，但归一化 50/50 不再满足正常信号门槛。 */
     raw[0]=raw[1]=4;TrackSensors_Update(&sensors,raw);
@@ -369,9 +369,48 @@ static void store_tests(void)
     track_guard_armed=1;p.kp100=4300;assert(!TrackStore_Save(&p));track_guard_armed=0;
     assert(stops>0);
 }
+/** @brief SPD1 旧速度记录迁移、C4 字段原子保存与损坏降级。 */
+static void c4_store_tests(void)
+{
+    TrackParams p,q;
+    uint8_t legacy[1024],saved[1024];
+    uint16_t crc;
+    int cut;
+    fail_after=-1;memset(flash_memory,0xff,sizeof(flash_memory));
+    assert(!TrackStore_Load(&p));p.speed_base=25;p.speed_curve=12;p.speed_kp100=4321;
+    assert(TrackStore_Save(&p));
+    /* 独立还原旧 SPD1：预留区全 FF，重算扩展 CRC，保留原速度字段。 */
+    memset(flash_memory+52,0xff,8);crc=TrackCRC16(flash_memory+32,28);
+    flash_memory[60]=(uint8_t)crc;flash_memory[61]=(uint8_t)(crc>>8);
+    assert(TrackStore_Load(&q) && q.speed_base==25 && q.speed_kp100==4321 &&
+           q.c4_a==TRACK_FOUR_WEIGHT_A && q.c4_b==TRACK_FOUR_WEIGHT_B && q.c4_c==TRACK_FOUR_WEIGHT_C);
+    memcpy(legacy,flash_memory,sizeof(legacy));
+    for(cut=0;cut<65;cut++)
+    {
+        memcpy(flash_memory,legacy,sizeof(legacy));fail_after=-1;assert(TrackStore_Load(&p));
+        p.c4_a=321;p.c4_b=654;p.c4_c=987;
+        mutations=0;fail_after=cut;assert(!TrackStore_Save(&p));
+        fail_after=-1;assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A && q.speed_base==25 && q.speed_kp100==4321);
+    }
+    memcpy(flash_memory,legacy,sizeof(legacy));assert(TrackStore_Load(&p));
+    p.c4_a=321;p.c4_b=654;p.c4_c=987;assert(TrackStore_Save(&p));
+    assert(TrackStore_Load(&q) && q.c4_a==321 && q.c4_b==654 && q.c4_c==987 && q.speed_kp100==4321);
+    mutations=0;fail_after=0;assert(TrackStore_Save(&q) && mutations==0);fail_after=-1;
+    memcpy(saved,flash_memory,sizeof(saved));
+    flash_memory[512+54]^=1; /* CRC 错误时恢复旧槽。 */
+    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A && q.speed_base==25);
+    memcpy(flash_memory,saved,sizeof(saved));flash_memory[512+58]='X';
+    crc=TrackCRC16(flash_memory+512+32,28);flash_memory[512+60]=(uint8_t)crc;flash_memory[512+61]=(uint8_t)(crc>>8);
+    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A); /* 未知格式即使 CRC 正确也拒绝。 */
+    memcpy(flash_memory,saved,sizeof(saved));flash_memory[512+52]=flash_memory[512+53]=0;
+    crc=TrackCRC16(flash_memory+512+32,28);flash_memory[512+60]=(uint8_t)crc;flash_memory[512+61]=(uint8_t)(crc>>8);
+    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A); /* A=0 的持久记录拒绝。 */
+    puts("PASS: legacy SPD1 speed preservation/C4 defaults, all 65 C4 upgrade power-cut points, persistence/no-op save and corrupt/invalid fallback");
+}
+
 int main(void)
 {
-    calibration_tests();pid_tests();body_center_tests();direction_tests();low_signal_tests();record_tests();loss_confirmation_tests();store_tests();
+    calibration_tests();pid_tests();body_center_tests();direction_tests();low_signal_tests();record_tests();loss_confirmation_tests();store_tests();c4_store_tests();
     printf("PASS: calibration (%d channels), body center/reference rejection/invalidation, PID, loss, CRC and interrupted saves\n",TRACK_SENSOR_COUNT);
     return 0;
 }

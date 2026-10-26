@@ -17,6 +17,8 @@ int main(void)
 
     memset(&state,0,sizeof(state));TrackParams_Default(&params);
     params.speed_base=20;params.speed_curve=10;
+    /* 固定仿真增益，不让用户实车调参宏改变被测电机模型的验收条件。 */
+    params.speed_kp100=3000;params.speed_ki100=3000;params.speed_kd100=0;
     assert(TrackSpeed_Target(&params,500,0)==15);
     assert(TrackSpeed_Target(&params,-500,0)==15);
     assert(TrackSpeed_Target(&params,0,1)==10);

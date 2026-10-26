@@ -1,7 +1,7 @@
 /**
  * @file    track_store.c
  * @brief   双槽 Flash 参数保存：CRC 校验、交替写入、最后提交、写后回读。
- * @note    32 字节 v2 基础记录后追加 32 字节速度扩展；兼容读取旧版 v1/v2。PID、方向、舵机、动力统一保存；
+ * @note    32 字节 v2 基础记录后追加 32 字节速度/C4 扩展；兼容读取旧版 v1/v2/SPD1。PID、权重、方向、舵机、动力统一保存；
  *          电感量程和车身居中参考不写 Flash。
  */
 #include "track_hw.h"
@@ -11,7 +11,7 @@
 #endif
 
 #define STORE_SLOT_NONE 255U
-#define STORE_TOTAL_BYTES 64U /* 前 32 字节保留 v2，后 32 字节为速度扩展，最后提交前段标记。 */
+#define STORE_TOTAL_BYTES 64U /* 前 32 字节保留 v2，后 32 字节为速度/C4 扩展，最后提交前段标记。 */
 #define IAP_READ        1U
 #define IAP_PROGRAM     2U
 #define IAP_ERASE       3U
@@ -112,6 +112,11 @@ static void encode_store_record(uint8_t *record, const TrackParams *params, uint
     store_u16(record + 46, params->speed_ki100);
     store_u16(record + 48, params->speed_kd100);
     memcpy(record + 50, record + 28, 2);
+    store_u16(record + 52, params->c4_a);
+    store_u16(record + 54, params->c4_b);
+    store_u16(record + 56, params->c4_c);
+    record[58] = 'C';
+    record[59] = '4';
     store_u16(record + 60, TrackCRC16(record + 32, 28));
     record[63] = 0x5a;
 }
@@ -123,6 +128,7 @@ static uint8_t decode_store_record(const uint8_t *record, TrackParams *params, u
     uint32_t candidate_sequence;
     uint8_t index;
     uint8_t legacy = 1;
+    uint8_t legacy_weights = 1;
 
     if (!TrackRecord_Decode(record, &candidate, &candidate_sequence)) return 0;
     for (index = 32; index < STORE_TOTAL_BYTES; ++index)
@@ -139,6 +145,18 @@ static uint8_t decode_store_record(const uint8_t *record, TrackParams *params, u
         candidate.speed_kp100 = load_u16(record + 44);
         candidate.speed_ki100 = load_u16(record + 46);
         candidate.speed_kd100 = load_u16(record + 48);
+        /* 旧 SPD1 的 52~59 全为 FF；保留其速度设置，C4 使用代码初值。 */
+        for (index = 52; index < 60; ++index)
+        {
+            if (record[index] != 0xff) legacy_weights = 0;
+        }
+        if (!legacy_weights)
+        {
+            if (record[58] != 'C' || record[59] != '4') return 0;
+            candidate.c4_a = load_u16(record + 52);
+            candidate.c4_b = load_u16(record + 54);
+            candidate.c4_c = load_u16(record + 56);
+        }
         if (!TrackParams_Valid(&candidate)) return 0;
     }
     *params = candidate;

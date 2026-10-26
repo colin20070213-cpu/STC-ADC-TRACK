@@ -91,6 +91,7 @@ static void enter(TrackMode target)
         case TRACK_SPEED: root_item=ROOT_MOTOR;child_item=1;break;
         case TRACK_SPEED_TARGET: root_item=ROOT_MOTOR;child_item=0;break;
         case TRACK_SPEED_PID: root_item=ROOT_PID;child_item=1;break;
+        case TRACK_C4_TUNE: root_item=ROOT_PID;child_item=2;break;
         case TRACK_LEFT_DIRECTION: root_item=ROOT_MOTOR;child_item=2;break;
         case TRACK_RIGHT_DIRECTION: root_item=ROOT_MOTOR;child_item=3;break;
         default:assert(0);return;
@@ -162,7 +163,7 @@ static void telemetry_tests(void)
     uart_busy=0;telemetry_task(now);
     assert(!strcmp(uart_line,"0,-98,100000,200000\r\n"));
     assert(strlen(uart_line)<sizeof(telemetry));
-    for(test_mode=TRACK_MENU;test_mode<=TRACK_SPEED_PID;test_mode++)
+    for(test_mode=TRACK_MENU;test_mode<=TRACK_C4_TUNE;test_mode++)
     {
         mode=test_mode;before=uart_calls;uart_busy=0;
         telemetry_task(now);
@@ -237,6 +238,53 @@ static void timing_tests(void)
     puts("PASS: actual 2ms scheduler, 500ms calibration/1s centering and 16ms rail confirmation");
 }
 
+/** @brief C4 编辑、步长、失败/撤销、恢复、重启和重新居中联锁。 */
+static void c4_menu_tests(void)
+{
+    TrackParams before;
+    unsigned n,calls=uart_calls;
+    assert(sensors.valid && sensors.center_valid);
+    before=params;
+    enter(TRACK_C4_TUNE);step();
+    assert(mode==TRACK_C4_TUNE && menu_page==MENU_PID && menu_item==2);
+    assert(!track_guard_armed && !hw_servo && !hw_left && !hw_right);
+    handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);step();
+    assert(params.c4_a==before.c4_a+1 && sensors.center_valid && !hw_servo && !hw_left);
+    dump_screen("MDK/ui-c4.bin");
+    handle_keys(KEY_LEFT_EVENT);assert(!editing && params.c4_a==before.c4_a && sensors.center_valid);
+    handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);store_fails=1;handle_keys(KEY_OK_EVENT);
+    assert(editing && sensors.center_valid && flash_params.c4_a==before.c4_a);
+    handle_keys(KEY_LEFT_EVENT);store_fails=0;
+    handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);
+    assert(params.c4_a==before.c4_a+10);
+    handle_keys(KEY_OK_EVENT);
+    assert(!editing && !sensors.center_valid && !sensors.center_bias && sensors.valid);
+    assert(flash_params.c4_a==before.c4_a+10 && strstr(message,"NEED CENTER"));
+    assert(!track_guard_armed && !hw_servo && !hw_left);
+    handle_keys(KEY_LEFT_EVENT);assert(menu_page==MENU_PID && menu_item==2);
+    enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_CENTER && !hw_left);
+    enter(TRACK_C4_TUNE);handle_keys(KEY_DOWN_EVENT);handle_keys(KEY_RIGHT_EVENT);
+    handle_keys(KEY_UP_EVENT);handle_keys(KEY_OK_EVENT);assert(flash_params.c4_b==before.c4_b+1);
+    handle_keys(KEY_DOWN_EVENT);handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_DOWN_EVENT);
+    handle_keys(KEY_OK_EVENT);assert(flash_params.c4_c==before.c4_c-1);
+    assert(params.kp100==before.kp100 && params.speed_kp100==before.speed_kp100 && params.center==before.center);
+    { TrackParams loaded;assert(TrackStore_Load(&loaded) && loaded.c4_a==before.c4_a+10 &&
+        loaded.c4_b==before.c4_b+1 && loaded.c4_c==before.c4_c-1); }
+    handle_keys(KEY_DOWN_EVENT);assert(pid_item==PID_ITEM_RESTORE);
+    dump_screen("MDK/ui-c4-restore.bin");
+    handle_keys(KEY_OK_EVENT);assert(editing && params.c4_a==TRACK_FOUR_WEIGHT_A && params.c4_b==TRACK_FOUR_WEIGHT_B);
+    handle_keys(KEY_LEFT_EVENT);assert(params.c4_a==before.c4_a+10 && !editing);
+    handle_keys(KEY_OK_EVENT);handle_keys(KEY_OK_EVENT);
+    assert(!editing && params.c4_a==TRACK_FOUR_WEIGHT_A && params.c4_b==TRACK_FOUR_WEIGHT_B && params.c4_c==TRACK_FOUR_WEIGHT_C);
+    assert(params.kp100==before.kp100 && params.speed_kp100==before.speed_kp100 && !hw_left && !hw_servo);
+    assert(uart_calls==calls); /* C4 页面不增加已约定的四列串口数据。 */
+    handle_keys(KEY_LEFT_EVENT);enter(TRACK_BODY_CENTER);handle_keys(KEY_OK_EVENT);
+    for(n=0;n<TRACK_BODY_SAMPLES;n++)step();
+    assert(sensors.center_status==TRACK_BODY_READY);handle_keys(KEY_OK_EVENT);
+    assert(sensors.valid && sensors.center_valid);handle_keys(KEY_LEFT_EVENT);
+    puts("PASS: C4 menu preview/fine/coarse, cancel/save failure, persisted ABC/restore, motors off and successful-save-only center invalidation/recalibration");
+}
+
 int main(void)
 {
     unsigned n, old_store_calls;uint16_t old;TrackParams before_restore, before_direction;
@@ -253,7 +301,7 @@ int main(void)
     menu_item=ROOT_MOTOR;handle_keys(KEY_OK_EVENT);assert(menu_page==MENU_MOTOR && menu_count()==4);
     dump_screen("MDK/ui-menu-3.bin");handle_keys(KEY_LEFT_EVENT);
     menu_item=ROOT_PID;handle_keys(KEY_OK_EVENT);
-    assert(mode==TRACK_MENU && menu_page==MENU_PID && menu_count()==2 && !track_guard_armed);
+    assert(mode==TRACK_MENU && menu_page==MENU_PID && menu_count()==3 && !track_guard_armed);
     dump_screen("MDK/ui-pid-menu.bin");
     handle_keys(KEY_DOWN_EVENT);handle_keys(KEY_OK_EVENT);
     assert(mode==TRACK_SPEED_PID && !track_guard_armed && !hw_left && !hw_servo);
@@ -297,6 +345,7 @@ int main(void)
     enter(TRACK_BODY_CENTER);handle_keys(KEY_OK_EVENT);sample_ok=0;step();handle_keys(KEY_OK_EVENT);
     assert(sensors.center_valid && sensors.center_bias==(int16_t)old);
     sample_ok=1;handle_keys(KEY_LEFT_EVENT);
+    c4_menu_tests();
     enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_SPEED && oled_on);
     enter(TRACK_SPEED_TARGET);handle_keys(KEY_RIGHT_EVENT);
     for(n=0;n<20;n++)handle_keys(KEY_UP_EVENT);
