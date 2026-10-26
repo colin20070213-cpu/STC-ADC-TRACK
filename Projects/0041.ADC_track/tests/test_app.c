@@ -22,6 +22,7 @@ static uint8_t encoder_good=1;
 static uint8_t encoder_stale;
 static unsigned encoder_reads;
 static unsigned uart_calls;
+static uint8_t uart_busy;
 static unsigned oled_commands, oled_data_bytes, oled_positions;
 static uint8_t oled_on=1;
 static uint16_t oled_address;
@@ -54,7 +55,8 @@ uint8_t TrackHW_EncoderSample(uint16_t *count,uint8_t *direction,uint32_t *sampl
 uint8_t TrackStore_Load(TrackParams *p) { if(flash_valid){*p=flash_params;return 1;}TrackParams_Default(p);flash_params=*p;return 0; }
 uint8_t TrackStore_Save(const TrackParams *p) { ++store_calls;if(store_fails)return 0;flash_params=*p;flash_valid=1;return 1; }
 TrackStoreError TrackStore_LastError(void) { return store_fails ? TRACK_STORE_ERASE : TRACK_STORE_OK; }
-uint8_t TrackUART_Queue(const char *s) { assert(strlen(s)<sizeof(uart_line));strcpy(uart_line,s);++uart_calls;return 1; }
+uint8_t TrackUART_IsIdle(void) { return !uart_busy; }
+uint8_t TrackUART_Queue(const char *s) { assert(!uart_busy);assert(strlen(s)<sizeof(uart_line));strcpy(uart_line,s);++uart_calls;uart_busy=1;return 1; }
 void Ms_Delay(uint16_t ms) { track_milliseconds+=ms; }
 void LCD_Set_Pos(uint8_t x,uint8_t y) { ++oled_positions;oled_address=(uint16_t)y*128+x; }
 void LCD_WrDat(uint8_t v) { ++oled_data_bytes;assert(oled_address<1024);oled_ram[oled_address++]=v; }
@@ -126,52 +128,50 @@ static void dump_screen(const char *path)
     assert(fwrite(framebuffer,1,1024,f)==1024);fclose(f);
 }
 
-/** @brief 检查真实四列 CSV 的顺序、标度、反馈来源、发送模式和周期。 */
+/** @brief 检查真实四列 CSV、串口完成门控及实时最新值，禁止积压旧帧。 */
 static void telemetry_tests(void)
 {
-    unsigned before;
+    unsigned before,n;
     uint32_t now=10000;
     TrackMode test_mode;
 
-    mode=TRACK_RUN;
-    last_telemetry=now;
-    before=uart_calls;
-    telemetry_task(now+TRACK_TELEMETRY_MS-1);
-    assert(uart_calls==before);
+    assert(TRACK_UART_BAUD==115200UL && TRACK_TELEMETRY_MS==0);
+    mode=TRACK_RUN;uart_busy=1;before=uart_calls;
+    for(n=0;n<1000;n++)telemetry_task(now+n);
+    assert(uart_calls==before); /* 发送未完成时，任何时间都不能生成第二帧。 */
     sensors.valid=1;sensors.center_valid=1;sensors.center_bias=150;
     sensors.norm[0]=600;sensors.norm[1]=400;sensors.norm[2]=sensors.norm[3]=0;
     speed_control.target=20.0f;speed_control.feedback=18.5f;
-    speed_control.raw_feedback=25.0f; /* 必须发送滤波后的反馈，不是这一路原始值。 */
+    speed_control.raw_feedback=25.0f;
     control.error=50;
-    telemetry_task(now+=TRACK_TELEMETRY_MS);
-    assert(uart_calls==before+1 && TRACK_TELEMETRY_MS==500);
-    assert(!strcmp(uart_line,"0,50,2000,1850\r\n"));
+    uart_busy=0;telemetry_task(now);
+    assert(uart_calls==before+1 && !strcmp(uart_line,"0,50,2000,1850\r\n"));
     sensors.norm[0]=400;sensors.norm[1]=600;control.error=-350;
-    telemetry_task(now+=TRACK_TELEMETRY_MS);
-    assert(!strcmp(uart_line,"0,-350,2000,1850\r\n"));
+    telemetry_task(now+1000);assert(uart_calls==before+1); /* 时间到仍不能积压。 */
+    uart_busy=0;telemetry_task(now+1000);
+    assert(uart_calls==before+2 && !strcmp(uart_line,"0,-350,2000,1850\r\n"));
+    /* 同一毫秒内发送完成也立即更新，毫秒计时不再限制最高吞吐。 */
+    uart_busy=0;speed_control.feedback=19.0f;telemetry_task(now+1000);
+    assert(uart_calls==before+3 && !strcmp(uart_line,"0,-350,2000,1900\r\n"));
 
-    /* 十字策略可置零控制误差，发送的实际位置仍来自电感反馈。 */
     control.error=0;control.crossing=1;
     sensors.norm[0]=1000;sensors.norm[1]=900;
-    telemetry_task(now+=TRACK_TELEMETRY_MS);
-    assert(!strcmp(uart_line,"0,-98,2000,1850\r\n"));
+    uart_busy=0;telemetry_task(now);
+    assert(!strcmp(uart_line,"0,-98,2000,1900\r\n"));
     speed_control.target=1000.0f;speed_control.feedback=2000.0f;
-    telemetry_task(now+=TRACK_TELEMETRY_MS);
+    uart_busy=0;telemetry_task(now);
     assert(!strcmp(uart_line,"0,-98,100000,200000\r\n"));
     assert(strlen(uart_line)<sizeof(telemetry));
-    assert(strlen(uart_line)*10000UL<=TRACK_UART_BAUD*TRACK_TELEMETRY_MS*4UL/5UL);
-
     for(test_mode=TRACK_MENU;test_mode<=TRACK_SPEED_PID;test_mode++)
     {
-        mode=test_mode;before=uart_calls;
-        telemetry_task(now+=TRACK_TELEMETRY_MS);
+        mode=test_mode;before=uart_calls;uart_busy=0;
+        telemetry_task(now);
         assert(uart_calls-before==(unsigned)(mode==TRACK_PID || mode==TRACK_SPEED_PID || mode==TRACK_RUN));
     }
-    before=uart_calls;TrackApp_Init();
-    assert(uart_calls==before); /* 上电无表头及 #CFG。 */
-    telemetry_task(TrackHW_Now()+TRACK_TELEMETRY_MS);
+    before=uart_calls;TrackApp_Init();uart_busy=0;
     assert(uart_calls==before);
-    puts("PASS: exactly four PID target/feedback columns, scales/signs, filtered speed, true position through crossing, allowed modes/period and silent startup/menu");
+    telemetry_task(TrackHW_Now());assert(uart_calls==before);
+    puts("PASS: four PID columns and scales, true feedback, no fixed wait, serial-completion gating/no backlog, latest sample and silent startup/menu");
 }
 
 /** @brief 验证居中页实际字模包含中间误差值和原始 ADC，防止只测计算不测显示。 */

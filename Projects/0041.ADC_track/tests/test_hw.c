@@ -173,8 +173,12 @@ int main(void)
     assert(!TrackHW_Sample(values) && !(PWMA_ENO&0x55) && !(PWMB_ENO&1));
     assert(track_adc_overruns>=TRACK_ADC_STALE_MS);
     finish_scan();tick(1);assert(TrackHW_Sample(values));TrackHW_Arm(0);
-    assert(TrackUART_Queue("abc"));assert(SBUF=='a');TrackUART_TxISR();assert(SBUF=='b');
-    TrackUART_TxISR();assert(SBUF=='c');TrackUART_TxISR();
+    assert(TrackUART_IsIdle());
+    EA=0;assert(TrackUART_IsIdle() && !EA);EA=1;
+    assert(TrackUART_Queue("abc"));assert(SBUF=='a' && !TrackUART_IsIdle());
+    TrackUART_TxISR();assert(SBUF=='b' && !TrackUART_IsIdle());
+    TrackUART_TxISR();assert(SBUF=='c' && !TrackUART_IsIdle()); /* 队列已空，末字节仍在途。 */
+    TrackUART_TxISR();assert(TrackUART_IsIdle());
     memset(chunk,'q',100);chunk[100]=0;
     for(n=0;n<5;n++)assert(TrackUART_Queue(chunk));
     assert(!TrackUART_Queue(chunk) && track_tx_dropped==1);

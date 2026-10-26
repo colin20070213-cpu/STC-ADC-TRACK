@@ -50,7 +50,7 @@
 #define TRACK_CONTROL_TIMEOUT  20     /* 无输出更新时的中断截止时间，单位 ms。 */
 #define TRACK_DISPLAY_PERIOD_MS 100   /* OLED 重绘周期，单位 ms。 */
 #define TRACK_UART_BAUD         115200UL /* 与蓝牙模块串口波特率保持一致，8N1。 */
-#define TRACK_TELEMETRY_MS      500    /* 四列 PID 目标/反馈保持 2Hz，与串口波特率独立。 */
+#define TRACK_TELEMETRY_MS      0U     /* 0=上一帧发完即发最新四列；非零为最小帧间隔 ms。 */
 /* 极值与车身居中标定；强度标度为 0～1000，ADC 原始值为 0～4095。 */
 #define TRACK_CAL_MIN_SAMPLES  ((500U + TRACK_PERIOD_MS - 1U) / TRACK_PERIOD_MS) /* 至少约 0.5 秒。 */
 #define TRACK_CAL_MIN_SPAN     100    /* 放大板正常时，每路原始 ADC 的最低有效跨度。 */

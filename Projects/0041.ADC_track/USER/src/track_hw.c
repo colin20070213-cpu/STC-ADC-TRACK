@@ -508,6 +508,18 @@ void TrackHW_FeedWatchdog(void)
     WDT_CONTR |= 0x10;
 }
 
+uint8_t TrackUART_IsIdle(void)
+{
+    uint8_t idle;
+    uint8_t previous_irq = EA;
+
+    EA = 0;
+    /* 队列空时，最后一个字节仍可能正在移出，必须同时检查 tx_active。 */
+    idle = !tx_active && tx_head == tx_tail;
+    EA = previous_irq;
+    return idle;
+}
+
 uint8_t TrackUART_Queue(const char *text)
 {
     uint16_t head;

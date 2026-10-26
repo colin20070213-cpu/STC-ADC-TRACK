@@ -75,6 +75,8 @@ typedef enum
 uint8_t TrackStore_Save(const TrackParams *params);
 /** @brief 查询最近一次保存的错误阶段；不会触发 EEPROM 操作。 */
 TrackStoreError TrackStore_LastError(void);
+/** @brief 队列及在途最后一字节均发送完才返回 1；只查询，不等待。 */
+uint8_t TrackUART_IsIdle(void);
 /** @brief 非阻塞入队完整字符串；空间不足返回 0 并累计丢帧。 */
 uint8_t TrackUART_Queue(const char *text);
 /** @brief 由 UART1 发送中断调用，最多发送一个字节。 */
