@@ -44,6 +44,11 @@ int main(void)
     assert(TrackSpeed_Calculate(&state,&params,0,3000,period)==TRACK_OK);
     assert(!state.output && state.integral==0 && state.target==0);
 
+    memset(&state,0,sizeof(state));params.speed_kp100=100000UL;params.speed_ki100=params.speed_kd100=0;
+    assert(TrackSpeed_Measure(&state,0,period));state.target=1.0f;state.output=2000;
+    assert(TrackSpeed_Calculate(&state,&params,20,3000,period)==TRACK_OK);
+    assert(fabsf(state.p_term-1050.0f)<0.1f && state.output>=1049 && state.output<=1051);
+
     params.speed_base=1000;params.speed_curve=0;params.speed_kp100=50000;params.speed_ki100=50000;
     memset(&state,0,sizeof(state));
     for(n=0;n<500;n++)

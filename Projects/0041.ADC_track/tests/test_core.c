@@ -331,7 +331,7 @@ static void store_tests(void)
     mutations=0;fail_after=0;
     assert(TrackStore_Save(&q)); assert(mutations==0); /* Unchanged: no erase. */
     fail_after=-1; memcpy(baseline,flash_memory,1024);
-    for(cut=0;cut<65;cut++) {
+    for(cut=0;cut<(int)TRACK_STORE_RECORD_BYTES+1;cut++) {
         memcpy(flash_memory,baseline,1024);fail_after=-1;TrackStore_Load(&p);
         p.kp100=4100;fail_after=cut;mutations=0;
         assert(!TrackStore_Save(&p)); /* Failure at every erase/program boundary. */
@@ -357,7 +357,7 @@ static void store_tests(void)
     assert(TrackStore_Load(&q) && q.speed_base==20 && q.speed_curve==10 &&
            q.speed_kp100==1234 && q.speed_ki100==5678 && q.speed_kd100==89);
     memcpy(baseline,flash_memory,1024);
-    for(cut=0;cut<65;cut++)
+    for(cut=0;cut<(int)TRACK_STORE_RECORD_BYTES+1;cut++)
     {
         memcpy(flash_memory,baseline,1024);fail_after=-1;assert(TrackStore_Load(&p));
         p.speed_base=30;p.speed_ki100=6000;mutations=0;fail_after=cut;
@@ -365,47 +365,68 @@ static void store_tests(void)
         fail_after=-1;assert(TrackStore_Load(&q) && q.speed_base==20 && q.speed_ki100==5678);
     }
     p=q;
-    puts("PASS: speed targets/gains persist atomically with legacy controls across all 65 power-cut points");
+    puts("PASS: speed targets/gains persist atomically with legacy controls across all 81 power-cut points");
     track_guard_armed=1;p.kp100=4300;assert(!TrackStore_Save(&p));track_guard_armed=0;
     assert(stops>0);
 }
-/** @brief SPD1 旧速度记录迁移、C4 字段原子保存与损坏降级。 */
+static void fixture_u16(uint8_t *p,uint16_t value)
+{
+    p[0]=(uint8_t)value;p[1]=(uint8_t)(value>>8);
+}
+
+/** @brief 固定旧 SPD1 兼容、32 位增益原子升级和损坏降级。 */
 static void c4_store_tests(void)
 {
     TrackParams p,q;
     uint8_t legacy[1024],saved[1024];
     uint16_t crc;
     int cut;
-    fail_after=-1;memset(flash_memory,0xff,sizeof(flash_memory));
-    assert(!TrackStore_Load(&p));p.speed_base=25;p.speed_curve=12;p.speed_kp100=4321;
-    assert(TrackStore_Save(&p));
-    /* 独立还原旧 SPD1：预留区全 FF，重算扩展 CRC，保留原速度字段。 */
-    memset(flash_memory+52,0xff,8);crc=TrackCRC16(flash_memory+32,28);
-    flash_memory[60]=(uint8_t)crc;flash_memory[61]=(uint8_t)(crc>>8);
-    assert(TrackStore_Load(&q) && q.speed_base==25 && q.speed_kp100==4321 &&
+    fail_after=-1;memset(flash_memory,0xff,sizeof(flash_memory));TrackParams_Default(&p);
+    /* 独立构造旧 64B SPD1，不通过新版编码器生成兼容性夹具。 */
+    TrackRecord_Encode(flash_memory,&p,7);
+    memcpy(flash_memory+32,"SPD1",4);memcpy(flash_memory+36,flash_memory+4,4);
+    fixture_u16(flash_memory+40,25);fixture_u16(flash_memory+42,12);
+    fixture_u16(flash_memory+44,4321);fixture_u16(flash_memory+46,3456);fixture_u16(flash_memory+48,12);
+    memcpy(flash_memory+50,flash_memory+28,2);
+    crc=TrackCRC16(flash_memory+32,28);fixture_u16(flash_memory+60,crc);flash_memory[63]=0x5a;
+    assert(TrackStore_Load(&q) && q.speed_base==25 && q.speed_kp100==4321 && q.speed_ki100==3456 &&
            q.c4_a==TRACK_FOUR_WEIGHT_A && q.c4_b==TRACK_FOUR_WEIGHT_B && q.c4_c==TRACK_FOUR_WEIGHT_C);
     memcpy(legacy,flash_memory,sizeof(legacy));
-    for(cut=0;cut<65;cut++)
+    fixture_u16(flash_memory+52,123);fixture_u16(flash_memory+54,234);fixture_u16(flash_memory+56,345);
+    flash_memory[58]='C';flash_memory[59]='4';fixture_u16(flash_memory+60,TrackCRC16(flash_memory+32,28));
+    assert(TrackStore_Load(&q) && q.c4_a==123 && q.c4_b==234 && q.c4_c==345 && q.speed_kp100==4321);
+    for(cut=0;cut<(int)TRACK_STORE_RECORD_BYTES+1;cut++)
     {
         memcpy(flash_memory,legacy,sizeof(legacy));fail_after=-1;assert(TrackStore_Load(&p));
-        p.c4_a=321;p.c4_b=654;p.c4_c=987;
+        p.c4_a=321;p.c4_b=654;p.c4_c=987;p.speed_kp100=100000UL;
         mutations=0;fail_after=cut;assert(!TrackStore_Save(&p));
         fail_after=-1;assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A && q.speed_base==25 && q.speed_kp100==4321);
     }
     memcpy(flash_memory,legacy,sizeof(legacy));assert(TrackStore_Load(&p));
-    p.c4_a=321;p.c4_b=654;p.c4_c=987;assert(TrackStore_Save(&p));
-    assert(TrackStore_Load(&q) && q.c4_a==321 && q.c4_b==654 && q.c4_c==987 && q.speed_kp100==4321);
+    p.c4_a=321;p.c4_b=654;p.c4_c=987;p.speed_kp100=100000UL;p.speed_ki100=250000UL;p.speed_kd100=500000UL;
+    assert(TrackStore_Save(&p));
+    assert(TrackStore_Load(&q) && q.c4_a==321 && q.c4_b==654 && q.c4_c==987 &&
+           q.speed_kp100==100000UL && q.speed_ki100==250000UL && q.speed_kd100==500000UL);
     mutations=0;fail_after=0;assert(TrackStore_Save(&q) && mutations==0);fail_after=-1;
     memcpy(saved,flash_memory,sizeof(saved));
-    flash_memory[512+54]^=1; /* CRC 错误时恢复旧槽。 */
+    for(cut=0;cut<(int)TRACK_STORE_RECORD_BYTES+1;cut++)
+    {
+        memcpy(flash_memory,saved,sizeof(saved));assert(TrackStore_Load(&p));
+        p.c4_a=322;p.speed_kp100=100001UL;mutations=0;fail_after=cut;
+        assert(!TrackStore_Save(&p));fail_after=-1;
+        assert(TrackStore_Load(&q) && q.c4_a==321 && q.speed_kp100==100000UL && q.speed_kd100==500000UL);
+    }
+    memcpy(flash_memory,saved,sizeof(saved));flash_memory[512+44]^=1;
     assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A && q.speed_base==25);
-    memcpy(flash_memory,saved,sizeof(saved));flash_memory[512+58]='X';
-    crc=TrackCRC16(flash_memory+512+32,28);flash_memory[512+60]=(uint8_t)crc;flash_memory[512+61]=(uint8_t)(crc>>8);
-    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A); /* 未知格式即使 CRC 正确也拒绝。 */
-    memcpy(flash_memory,saved,sizeof(saved));flash_memory[512+52]=flash_memory[512+53]=0;
-    crc=TrackCRC16(flash_memory+512+32,28);flash_memory[512+60]=(uint8_t)crc;flash_memory[512+61]=(uint8_t)(crc>>8);
-    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A); /* A=0 的持久记录拒绝。 */
-    puts("PASS: legacy SPD1 speed preservation/C4 defaults, all 65 C4 upgrade power-cut points, persistence/no-op save and corrupt/invalid fallback");
+    memcpy(flash_memory,saved,sizeof(saved));flash_memory[512+32]='X';
+    fixture_u16(flash_memory+512+76,TrackCRC16(flash_memory+512+32,44));
+    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A);
+    memcpy(flash_memory,saved,sizeof(saved));fixture_u16(flash_memory+512+58,0);
+    fixture_u16(flash_memory+512+76,TrackCRC16(flash_memory+512+32,44));
+    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A);
+    p=q;p.speed_kp100=TRACK_SPEED_GAIN_MAX_X100+1;
+    assert(!TrackParams_Valid(&p) && !TrackStore_Save(&p));
+    puts("PASS: old SPD1 with/without C4, 32-bit speed gains 1000/2500/5000, all 81 upgrade/new-save power-cut points, unchanged save and corrupt/invalid fallback");
 }
 
 int main(void)

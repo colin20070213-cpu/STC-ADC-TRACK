@@ -8,6 +8,7 @@
 
 #include "track_pid.h"
 
+#define TRACK_STORE_RECORD_BYTES 80U /* 32B 基础记录 + 48B SPD2 扩展，原提交字节最后写。 */
 #define TRACK_RECORD_BYTES  32
 #define TRACK_RECORD_COMMIT 0xA5
 
@@ -77,9 +78,9 @@ typedef struct
     uint8_t right_reverse;   /**< 逻辑右电机反向开关，0=正向，1=反向。 */
     uint16_t speed_base;     /**< 基础目标，P04 计数/10ms；0 表示未设置。 */
     uint16_t speed_curve;    /**< 大偏差时的目标速度，不大于 speed_base。 */
-    uint16_t speed_kp100;    /**< 独立速度环 Kp ×100。 */
-    uint16_t speed_ki100;    /**< 独立速度环 Ki ×100。 */
-    uint16_t speed_kd100;    /**< 独立速度环 Kd ×100，默认 0。 */
+    uint32_t speed_kp100;    /**< 独立速度环 Kp ×100。 */
+    uint32_t speed_ki100;    /**< 独立速度环 Ki ×100。 */
+    uint32_t speed_kd100;    /**< 独立速度环 Kd ×100，默认 0。 */
     uint16_t c4_a;           /**< 横电感权重 A ×100，1~1000，100 对应 1.00。 */
     uint16_t c4_b;           /**< 纵电感分子权重 B ×100，0~1000。 */
     uint16_t c4_c;           /**< 纵电感分母权重 C ×100，0~1000。 */

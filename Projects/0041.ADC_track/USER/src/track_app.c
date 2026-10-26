@@ -118,7 +118,8 @@ static uint8_t menu_selection[MENU_PAGE_COUNT]; /**< 每层分别记住光标。
 static uint8_t pid_item;         /**< 0=Kp，1=Ki，2=Kd，3=恢复 PID 初值。 */
 static uint8_t speed_item;       /**< 0=基础动力，1=弯道最低动力。 */
 static uint8_t editing;
-static uint8_t coarse_step;
+static uint8_t coarse_step;       /**< 舵机/电机页保留原两档步长。 */
+static uint8_t tuning_step_index; /**< PID 大类三档：0=0.01，1=0.10，2=1.00。 */
 static uint8_t defaults_loaded;
 static uint8_t display_busy;
 static uint8_t display_off;      /**< 运行中熄屏；停车后完整更新画面再亮屏。 */
@@ -415,6 +416,7 @@ static void render_body_center(void)
 static void render_pid_restore(void)
 {
     TrackParams preview;
+    uint32_t kp, ki, kd;
 
     preview = params;
     if (!editing)
@@ -422,26 +424,33 @@ static void render_pid_restore(void)
         if (mode == TRACK_SPEED_PID) TrackParams_RestoreSpeedPID(&preview);
         else TrackParams_RestorePID(&preview);
     }
-    if (mode == TRACK_SPEED_PID)
-    {
-        preview.kp100=preview.speed_kp100;preview.ki100=preview.speed_ki100;preview.kd100=preview.speed_kd100;
-    }
+    kp = mode == TRACK_SPEED_PID ? preview.speed_kp100 : preview.kp100;
+    ki = mode == TRACK_SPEED_PID ? preview.speed_ki100 : preview.ki100;
+    kd = mode == TRACK_SPEED_PID ? preview.speed_kd100 : preview.kd100;
     label_at(0, 2, LABEL_PID_RESTORE);
-    sprintf(text_line, "Kp:%u.%02u", preview.kp100 / 100, preview.kp100 % 100);
+    sprintf(text_line, "Kp:%lu.%02lu", (unsigned long)(kp / 100), (unsigned long)(kp % 100));
     text_at(0, 4, text_line);
-    sprintf(text_line, "Ki:%u.%02u", preview.ki100 / 100, preview.ki100 % 100);
+    sprintf(text_line, "Ki:%lu.%02lu", (unsigned long)(ki / 100), (unsigned long)(ki % 100));
     text_at(0, 5, text_line);
-    sprintf(text_line, "Kd:%u.%02u", preview.kd100 / 100, preview.kd100 % 100);
+    sprintf(text_line, "Kd:%lu.%02lu", (unsigned long)(kd / 100), (unsigned long)(kd % 100));
     text_at(0, 6, text_line);
     text_at(0, 7, message[0] ? message :
             (editing ? "OK:save <:undo" : "OK:preview ^v:pick"));
+}
+
+/** @brief 三参数调参页的步长提示，和内部百分之一单位保持一致。 */
+static const char *tuning_step_text(void)
+{
+    if (tuning_step_index == 2) return "EDIT 1.00";
+    if (tuning_step_index == 1) return "EDIT 0.10";
+    return "EDIT 0.01";
 }
 
 /** @brief PID 前三项保持原布局，第四项单独显示恢复初值选项。 */
 static void render_pid(void)
 {
     uint8_t item;
-    uint16_t gain;
+    uint32_t gain;
     const char *gain_name;
 
     sprintf(text_line, "%u/4", (unsigned int)pid_item + 1);
@@ -465,9 +474,9 @@ static void render_pid(void)
             gain = item == 0 ? params.speed_kp100 : item == 1 ? params.speed_ki100 : params.speed_kd100;
         else gain = item == 0 ? params.kp100 : item == 1 ? params.ki100 : params.kd100;
         gain_name = item == 0 ? "Kp" : item == 1 ? "Ki" : "Kd";
-        sprintf(text_line, "%c%s:%3u.%02u %s", pid_item == item ? '>' : ' ', gain_name,
-                gain / 100, gain % 100,
-                editing && pid_item == item ? (coarse_step ? "EDIT .10" : "EDIT .01") : "");
+        sprintf(text_line, "%c%s:%4lu.%02lu %s", pid_item == item ? '>' : ' ', gain_name,
+                (unsigned long)(gain / 100), (unsigned long)(gain % 100),
+                editing && pid_item == item ? tuning_step_text() : "");
         text_at(0, (uint8_t)(item + 3), text_line);
     }
     if (mode == TRACK_SPEED_PID)
@@ -498,7 +507,7 @@ static void render_c4(void)
         value = item == 0 ? preview.c4_a : item == 1 ? preview.c4_b : preview.c4_c;
         sprintf(text_line, "%c%c:%2u.%02u %s", !restoring && pid_item == item ? '>' : ' ',
                 'A' + item, value / 100, value % 100,
-                !restoring && editing && pid_item == item ? (coarse_step ? "EDIT .10" : "EDIT .01") : "");
+                !restoring && editing && pid_item == item ? tuning_step_text() : "");
         text_at(0, (uint8_t)(item + (restoring ? 4 : 3)), text_line);
     }
     if (!restoring)
@@ -784,6 +793,7 @@ static void enter_menu_item(void)
     entry_params = params;
     editing = 0;
     coarse_step = 0;
+    tuning_step_index = 0;
     message[0] = 0;
     fault = TRACK_OK;
     reset_pid();
@@ -874,12 +884,18 @@ static void enter_menu_item(void)
 static void adjust_param(int8_t direction)
 {
     TrackParams candidate;
-    uint16_t *selected_value;
+    uint16_t *selected_value = 0;
+    uint32_t *selected_speed_gain = 0;
     uint16_t step;
     int32_t adjusted_value;
 
     candidate = params;
     step = coarse_step ? 10 : 1;
+    if (mode == TRACK_PID || mode == TRACK_SPEED_PID || mode == TRACK_C4_TUNE)
+    {
+        /* 参数以实际值的 100 倍保存，三档分别增加 1、10、100。 */
+        step = tuning_step_index == 2 ? 100 : tuning_step_index == 1 ? 10 : 1;
+    }
     if (mode == TRACK_C4_TUNE)
     {
         selected_value = pid_item == 0 ? &candidate.c4_a :
@@ -887,7 +903,7 @@ static void adjust_param(int8_t direction)
     }
     else if (mode == TRACK_SPEED_PID)
     {
-        selected_value = pid_item == 0 ? &candidate.speed_kp100 :
+        selected_speed_gain = pid_item == 0 ? &candidate.speed_kp100 :
                          pid_item == 1 ? &candidate.speed_ki100 : &candidate.speed_kd100;
     }
     else if (mode == TRACK_PID)
@@ -910,13 +926,16 @@ static void adjust_param(int8_t direction)
         selected_value = mode == TRACK_CENTER ? &candidate.center :
                          mode == TRACK_LIMIT_LEFT ? &candidate.left : &candidate.right;
     }
-    adjusted_value = (int32_t)*selected_value + direction * (int16_t)step;
-    if (adjusted_value < 0 || adjusted_value > 65535L)
+    adjusted_value = (int32_t)(selected_speed_gain ? *selected_speed_gain : *selected_value) +
+                     direction * (int16_t)step;
+    if (adjusted_value < 0 || (uint32_t)adjusted_value >
+        (selected_speed_gain ? TRACK_SPEED_GAIN_MAX_X100 : 65535UL))
     {
         set_message("LIMIT REACHED");
         return;
     }
-    *selected_value = (uint16_t)adjusted_value;
+    if (selected_speed_gain) *selected_speed_gain = (uint32_t)adjusted_value;
+    else *selected_value = (uint16_t)adjusted_value;
     if (!TrackParams_Valid(&candidate))
     {
         set_message("LIMIT REACHED");
@@ -998,7 +1017,7 @@ static void handle_pid_keys(uint8_t keys)
             }
             else if (keys & KEY_RIGHT_EVENT)
             {
-                coarse_step = !coarse_step;
+                tuning_step_index = (tuning_step_index + 1) % 3;
             }
         }
         return;

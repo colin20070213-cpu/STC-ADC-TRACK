@@ -285,6 +285,46 @@ static void c4_menu_tests(void)
     puts("PASS: C4 menu preview/fine/coarse, cancel/save failure, persisted ABC/restore, motors off and successful-save-only center invalidation/recalibration");
 }
 
+static uint32_t test_tuning_value(unsigned item)
+{
+    if(mode==TRACK_PID)return item==0?params.kp100:item==1?params.ki100:params.kd100;
+    if(mode==TRACK_SPEED_PID)return item==0?params.speed_kp100:item==1?params.speed_ki100:params.speed_kd100;
+    return item==0?params.c4_a:item==1?params.c4_b:params.c4_c;
+}
+
+/** @brief 经真实按键检查三类九个字段的三档增减、循环及撤销。 */
+static void tuning_step_tests(void)
+{
+    static const TrackMode pages[]={TRACK_PID,TRACK_SPEED_PID,TRACK_C4_TUNE};
+    TrackParams before;
+    unsigned page,item;
+    for(page=0;page<3;page++)
+    {
+        before=params;enter(pages[page]);
+        assert(tuning_step_index==0);
+        for(item=0;item<3;item++)
+        {
+            uint32_t old=test_tuning_value(item);handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);
+            assert(test_tuning_value(item)==old+1 && !strcmp(tuning_step_text(),"EDIT 0.01"));
+            handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);
+            assert(test_tuning_value(item)==old+11 && !strcmp(tuning_step_text(),"EDIT 0.10"));
+            handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);
+            assert(test_tuning_value(item)==old+111 && !strcmp(tuning_step_text(),"EDIT 1.00"));
+            if(item==0)dump_screen(page==0?"MDK/ui-pid-step1.bin":page==1?"MDK/ui-speed-pid-step1.bin":"MDK/ui-c4-step1.bin");
+            handle_keys(KEY_DOWN_EVENT);assert(test_tuning_value(item)==old+11);
+            handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_DOWN_EVENT);
+            assert(tuning_step_index==0 && test_tuning_value(item)==old+10);
+            step();assert(!hw_left && !hw_right);
+            if(mode!=TRACK_PID)assert(!hw_servo && !track_guard_armed);
+            handle_keys(KEY_LEFT_EVENT);assert(!editing && test_tuning_value(item)==old);
+            if(item<2)handle_keys(KEY_DOWN_EVENT);
+        }
+        assert(!memcmp(&params,&before,sizeof(params)));
+        handle_keys(KEY_LEFT_EVENT);
+    }
+    puts("PASS: 0.01/0.10/1.00 step cycle and signed adjustment for all nine PID/C4 fields, correct text, motor interlocks and cancel");
+}
+
 int main(void)
 {
     unsigned n, old_store_calls;uint16_t old;TrackParams before_restore, before_direction;
@@ -346,6 +386,7 @@ int main(void)
     assert(sensors.center_valid && sensors.center_bias==(int16_t)old);
     sample_ok=1;handle_keys(KEY_LEFT_EVENT);
     c4_menu_tests();
+    tuning_step_tests();
     enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_SPEED && oled_on);
     enter(TRACK_SPEED_TARGET);handle_keys(KEY_RIGHT_EVENT);
     for(n=0;n<20;n++)handle_keys(KEY_UP_EVENT);
@@ -356,12 +397,12 @@ int main(void)
     dump_screen("MDK/ui-speed-target.bin");handle_keys(KEY_LEFT_EVENT);
     old=params.kp100;enter(TRACK_SPEED_PID);step();assert(!track_guard_armed && !hw_left && !hw_servo);
     handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);handle_keys(KEY_OK_EVENT);
-    assert(params.speed_kp100==(uint16_t)(TRACK_SPEED_DEFAULT_KP*100+0.5f)+1 && params.kp100==old);
+    assert(params.speed_kp100==(uint32_t)(TRACK_SPEED_DEFAULT_KP*100+0.5f)+1 && params.kp100==old);
     assert(!track_guard_armed && !hw_left && !hw_servo);
     dump_screen("MDK/ui-speed-pid.bin");
     handle_keys(KEY_UP_EVENT);handle_keys(KEY_OK_EVENT);assert(editing);
     handle_keys(KEY_OK_EVENT);assert(!editing && params.kp100==old &&
-        params.speed_kp100==(uint16_t)(TRACK_SPEED_DEFAULT_KP*100+0.5f));
+        params.speed_kp100==(uint32_t)(TRACK_SPEED_DEFAULT_KP*100+0.5f));
     assert(!track_guard_armed && !hw_left && !hw_servo);
     handle_keys(KEY_LEFT_EVENT);
     enter(TRACK_PID);step();assert(mode==TRACK_PID && !hw_left && !hw_right && hw_servo);

@@ -1,7 +1,7 @@
 /**
  * @file    track_store.c
  * @brief   双槽 Flash 参数保存：CRC 校验、交替写入、最后提交、写后回读。
- * @note    32 字节 v2 基础记录后追加 32 字节速度/C4 扩展；兼容读取旧版 v1/v2/SPD1。PID、权重、方向、舵机、动力统一保存；
+ * @note    32 字节 v2 基础记录后追加 48 字节 SPD2 扩展；兼容旧版 v1/v2/SPD1。PID、权重、方向、舵机、动力统一保存；
  *          电感量程和车身居中参考不写 Flash。
  */
 #include "track_hw.h"
@@ -11,7 +11,7 @@
 #endif
 
 #define STORE_SLOT_NONE 255U
-#define STORE_TOTAL_BYTES 64U /* 前 32 字节保留 v2，后 32 字节为速度/C4 扩展，最后提交前段标记。 */
+#define STORE_TOTAL_BYTES TRACK_STORE_RECORD_BYTES /* 80B，扩展支持 32 位速度增益。 */
 #define IAP_READ        1U
 #define IAP_PROGRAM     2U
 #define IAP_ERASE       3U
@@ -99,36 +99,75 @@ static uint16_t load_u16(const uint8_t *buffer)
     return (uint16_t)buffer[0] | ((uint16_t)buffer[1] << 8);
 }
 
-/** @brief 在原 v2 后追加独立 CRC 扩展；与原序号、原 CRC 绑定。 */
+/** @brief 明确编码 32 位小端字段，不直接保存 C 结构体内存。 */
+static void store_u32(uint8_t *buffer, uint32_t value)
+{
+    buffer[0] = (uint8_t)value;
+    buffer[1] = (uint8_t)(value >> 8);
+    buffer[2] = (uint8_t)(value >> 16);
+    buffer[3] = (uint8_t)(value >> 24);
+}
+
+static uint32_t load_u32(const uint8_t *buffer)
+{
+    return (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
+           ((uint32_t)buffer[2] << 16) | ((uint32_t)buffer[3] << 24);
+}
+
+/** @brief SPD2 支持 32 位速度增益；与基础序号/CRC 绑定并最后提交基础标记。 */
 static void encode_store_record(uint8_t *record, const TrackParams *params, uint32_t sequence)
 {
     TrackRecord_Encode(record, params, sequence);
-    memset(record + 32, 0xff, 32);
-    memcpy(record + 32, "SPD1", 4);
+    memset(record + 32, 0xff, STORE_TOTAL_BYTES - 32);
+    memcpy(record + 32, "SPD2", 4);
     memcpy(record + 36, record + 4, 4);
     store_u16(record + 40, params->speed_base);
     store_u16(record + 42, params->speed_curve);
-    store_u16(record + 44, params->speed_kp100);
-    store_u16(record + 46, params->speed_ki100);
-    store_u16(record + 48, params->speed_kd100);
-    memcpy(record + 50, record + 28, 2);
-    store_u16(record + 52, params->c4_a);
-    store_u16(record + 54, params->c4_b);
-    store_u16(record + 56, params->c4_c);
-    record[58] = 'C';
-    record[59] = '4';
-    store_u16(record + 60, TrackCRC16(record + 32, 28));
-    record[63] = 0x5a;
+    store_u32(record + 44, params->speed_kp100);
+    store_u32(record + 48, params->speed_ki100);
+    store_u32(record + 52, params->speed_kd100);
+    memcpy(record + 56, record + 28, 2);
+    store_u16(record + 58, params->c4_a);
+    store_u16(record + 60, params->c4_b);
+    store_u16(record + 62, params->c4_c);
+    store_u16(record + 76, TrackCRC16(record + 32, 44));
+    record[79] = 0x5a;
 }
 
-/** @brief 旧扇区后半全 FF 则沿用速度初值；扩展损坏不能当成合法新记录。 */
+/** @brief 兼容读取旧 SPD1 的 16 位增益及可选 C4 预留区，不改旧数据标度。 */
+static uint8_t decode_spd1(const uint8_t *record, TrackParams *candidate)
+{
+    uint8_t index;
+    uint8_t legacy_weights = 1;
+
+    if (memcmp(record + 36, record + 4, 4) || memcmp(record + 50, record + 28, 2) ||
+        record[63] != 0x5a || load_u16(record + 60) != TrackCRC16(record + 32, 28)) return 0;
+    candidate->speed_base = load_u16(record + 40);
+    candidate->speed_curve = load_u16(record + 42);
+    candidate->speed_kp100 = load_u16(record + 44);
+    candidate->speed_ki100 = load_u16(record + 46);
+    candidate->speed_kd100 = load_u16(record + 48);
+    for (index = 52; index < 60; ++index)
+    {
+        if (record[index] != 0xff) legacy_weights = 0;
+    }
+    if (!legacy_weights)
+    {
+        if (record[58] != 'C' || record[59] != '4') return 0;
+        candidate->c4_a = load_u16(record + 52);
+        candidate->c4_b = load_u16(record + 54);
+        candidate->c4_c = load_u16(record + 56);
+    }
+    return 1;
+}
+
+/** @brief 识别旧基础记录、SPD1、SPD2；损坏扩展不能当作缺失参数。 */
 static uint8_t decode_store_record(const uint8_t *record, TrackParams *params, uint32_t *sequence)
 {
     TrackParams candidate;
     uint32_t candidate_sequence;
     uint8_t index;
     uint8_t legacy = 1;
-    uint8_t legacy_weights = 1;
 
     if (!TrackRecord_Decode(record, &candidate, &candidate_sequence)) return 0;
     for (index = 32; index < STORE_TOTAL_BYTES; ++index)
@@ -137,26 +176,24 @@ static uint8_t decode_store_record(const uint8_t *record, TrackParams *params, u
     }
     if (!legacy)
     {
-        if (memcmp(record + 32, "SPD1", 4) || memcmp(record + 36, record + 4, 4) ||
-            memcmp(record + 50, record + 28, 2) || record[63] != 0x5a ||
-            load_u16(record + 60) != TrackCRC16(record + 32, 28)) return 0;
-        candidate.speed_base = load_u16(record + 40);
-        candidate.speed_curve = load_u16(record + 42);
-        candidate.speed_kp100 = load_u16(record + 44);
-        candidate.speed_ki100 = load_u16(record + 46);
-        candidate.speed_kd100 = load_u16(record + 48);
-        /* 旧 SPD1 的 52~59 全为 FF；保留其速度设置，C4 使用代码初值。 */
-        for (index = 52; index < 60; ++index)
+        if (!memcmp(record + 32, "SPD1", 4))
         {
-            if (record[index] != 0xff) legacy_weights = 0;
+            if (!decode_spd1(record, &candidate)) return 0;
         }
-        if (!legacy_weights)
+        else if (!memcmp(record + 32, "SPD2", 4))
         {
-            if (record[58] != 'C' || record[59] != '4') return 0;
-            candidate.c4_a = load_u16(record + 52);
-            candidate.c4_b = load_u16(record + 54);
-            candidate.c4_c = load_u16(record + 56);
+            if (memcmp(record + 36, record + 4, 4) || memcmp(record + 56, record + 28, 2) ||
+                record[79] != 0x5a || load_u16(record + 76) != TrackCRC16(record + 32, 44)) return 0;
+            candidate.speed_base = load_u16(record + 40);
+            candidate.speed_curve = load_u16(record + 42);
+            candidate.speed_kp100 = load_u32(record + 44);
+            candidate.speed_ki100 = load_u32(record + 48);
+            candidate.speed_kd100 = load_u32(record + 52);
+            candidate.c4_a = load_u16(record + 58);
+            candidate.c4_b = load_u16(record + 60);
+            candidate.c4_c = load_u16(record + 62);
         }
+        else return 0;
         if (!TrackParams_Valid(&candidate)) return 0;
     }
     *params = candidate;

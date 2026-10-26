@@ -99,7 +99,7 @@
 #define TRACK_SPEED_CURVE_DEFAULT   0U
 #define TRACK_SPEED_TARGET_MAX      1000U
 #ifndef TRACK_SPEED_DEFAULT_KP
-#define TRACK_SPEED_DEFAULT_KP      300.00f
+#define TRACK_SPEED_DEFAULT_KP      1000.00f
 #endif
 #ifndef TRACK_SPEED_DEFAULT_KI
 #define TRACK_SPEED_DEFAULT_KI      0.00f
@@ -107,7 +107,7 @@
 #ifndef TRACK_SPEED_DEFAULT_KD
 #define TRACK_SPEED_DEFAULT_KD       0.00f
 #endif
-#define TRACK_SPEED_GAIN_MAX_X100    50000U
+#define TRACK_SPEED_GAIN_MAX_X100    500000UL /* 三项速度增益最大 5000.00，32 位保存。 */
 #define TRACK_SPEED_FEEDBACK_TAU_MS  10.0f /* 轮速低通时间常数，抑制短窗口量化跳动。 */
 #define TRACK_SPEED_D_TAU_MS         30.0f /* 测量微分低通时间常数，与实际 dt 配合。 */
 #define TRACK_SPEED_RAMP_PER_SECOND  25.0f /* 每秒增加的目标计数/10ms。 */

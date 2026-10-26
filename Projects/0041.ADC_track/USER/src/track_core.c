@@ -30,9 +30,9 @@ void TrackParams_RestorePID(TrackParams *params)
 
 void TrackParams_RestoreSpeedPID(TrackParams *params)
 {
-    params->speed_kp100 = (uint16_t)(TRACK_SPEED_DEFAULT_KP * 100.0f + 0.5f);
-    params->speed_ki100 = (uint16_t)(TRACK_SPEED_DEFAULT_KI * 100.0f + 0.5f);
-    params->speed_kd100 = (uint16_t)(TRACK_SPEED_DEFAULT_KD * 100.0f + 0.5f);
+    params->speed_kp100 = (uint32_t)(TRACK_SPEED_DEFAULT_KP * 100.0f + 0.5f);
+    params->speed_ki100 = (uint32_t)(TRACK_SPEED_DEFAULT_KI * 100.0f + 0.5f);
+    params->speed_kd100 = (uint32_t)(TRACK_SPEED_DEFAULT_KD * 100.0f + 0.5f);
 }
 
 void TrackParams_RestoreC4(TrackParams *params)
@@ -51,6 +51,7 @@ static uint8_t c4_weights_valid(const TrackParams *params)
 
 void TrackParams_Default(TrackParams *params)
 {
+    memset(params, 0, sizeof(*params)); /* 同时初始化 32 位字段带来的对齐填充。 */
     TrackParams_RestorePID(params);
     TrackParams_RestoreSpeedPID(params);
     TrackParams_RestoreC4(params);

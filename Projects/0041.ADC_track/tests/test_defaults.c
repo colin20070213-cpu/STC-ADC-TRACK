@@ -65,7 +65,7 @@ int main(void)
     assert(!write_count);
     /* 旧记录升级到含方向的 v2 时，逐点断电也必须恢复旧参数。 */
     memcpy(legacy_flash,flash_memory,sizeof(legacy_flash));
-    for(cut=0;cut<65;cut++)
+    for(cut=0;cut<(int)TRACK_STORE_RECORD_BYTES+1;cut++)
     {
         memcpy(flash_memory,legacy_flash,sizeof(legacy_flash));
         fail_after=-1;
@@ -104,6 +104,6 @@ int main(void)
     assert(TrackStore_Load(&params));
     assert(params.servo_left_sign==-1 && params.left_reverse && params.right_reverse);
     assert(params.center==751 && params.left==695 && params.right==805);
-    puts("PASS: code defaults/Flash priority, legacy migration interrupted at 65 points, PID-only restore persistence");
+    puts("PASS: code defaults/Flash priority, legacy migration interrupted at 81 points, PID-only restore persistence");
     return 0;
 }
