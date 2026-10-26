@@ -670,6 +670,16 @@
               <FilePath>..\USER\src\track_pid.c</FilePath>
             </File>
             <File>
+              <FileName>track_speed.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\USER\inc\track_speed.h</FilePath>
+            </File>
+            <File>
+              <FileName>track_speed.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\USER\src\track_speed.c</FilePath>
+            </File>
+            <File>
               <FileName>track_store.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\USER\src\track_store.c</FilePath>

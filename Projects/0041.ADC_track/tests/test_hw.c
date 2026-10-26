@@ -24,6 +24,8 @@ void PWM_Init(uint8_t pin,uint32_t freq,uint32_t duty)
     }
     else {PWMA_ARRH=period>>8;PWMA_ARRL=(uint8_t)period;}
 }
+void Encoder_Init(void) {}
+uint8_t Encoder_Snapshot(uint16_t *count,uint8_t *direction) { *count=123;*direction=1;return 1; }
 void ADC_Init(uint8_t pin,uint8_t speed){(void)pin;(void)speed;}
 void UART_Init(uint8_t u,uint8_t rx,uint8_t tx,uint32_t b,uint8_t t)
 {
@@ -118,6 +120,8 @@ int main(void)
     assert((PWMA_ENO&0x55)==0x55 && word(PWMA_CCR1H,PWMA_CCR1L)==1989);
     assert(word(PWMA_CCR4H,PWMA_CCR4L)==1989);
     TrackHW_Set(750,4001,4000,1);assert(!(PWMA_ENO&0x55) && !(PWMB_ENO&1));
+    TrackHW_Arm(1);TrackHW_Set(750,1000,900,1);
+    assert(!(PWMA_ENO&0x55) && !(PWMB_ENO&1)); /* 驱动层拒绝差速指令。 */
     TrackHW_Arm(0);
     P27=0;tick(19);assert(!TrackHW_Keys());tick(1);assert(TrackHW_Keys()==KEY_OK_EVENT);
     tick(1000);assert(!TrackHW_Keys());P27=1;tick(20);

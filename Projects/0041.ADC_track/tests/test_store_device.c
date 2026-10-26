@@ -75,10 +75,11 @@ int main(void)
     assert(nop_count == 4 * operations && watchdog_feeds == operations);
 
     /* 使用实际 IAP 寄存器路径复现速度保存：阈值 40 不应被参数校验拒绝。 */
+    params.speed_base=25;params.speed_curve=12;params.speed_kp100=3500;
     params.lost_sum = 40;
     params.base_duty = 4000;
     assert(TrackStore_Save(&params) && TrackStore_LastError() == TRACK_STORE_OK);
-    assert(TrackStore_Load(&loaded) && loaded.lost_sum == 40 && loaded.base_duty == 4000);
+    assert(TrackStore_Load(&loaded) && loaded.lost_sum == 40 && loaded.base_duty == 4000 && loaded.speed_base==25 && loaded.speed_kp100==3500);
 
     before = operations;
     assert(!iap_command(0x01fc00UL, 3, 0xff, &readback));

@@ -1,5 +1,7 @@
 #ifndef TRACK_HW_TEST_DEVICE_H
 #define TRACK_HW_TEST_DEVICE_H
+void Encoder_Init(void);
+uint8_t Encoder_Snapshot(uint16_t *count,uint8_t *direction);
 #define FOSC 33177600UL
 extern uint8_t EADC,PADC,PADCH;
 extern uint8_t EA,P42,P46,P45,P41,P27,P60,P62,P64,P66,P74,PT0;

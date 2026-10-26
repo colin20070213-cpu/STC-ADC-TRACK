@@ -1,23 +1,22 @@
-# STC-ADC-TRACK 四电感与 1ms ADC
+# STC-ADC-TRACK 四电感与单编码器速度闭环
 
-当前分支为 four-sensor-1ms。改造前双电感完整版本保存在 main 和 [dual-stable-20261023](https://github.com/colin20070213-cpu/STC-ADC-TRACK/tree/dual-stable-20261023)，该标签始终对应提交 1d4bbad2491c0c1bc7a7a1e43b5674c4dcc48344。
+当前分支为 four-sensor-1ms。双电感历史完整版本保留在 main 和 [dual-stable-20261023](https://github.com/colin20070213-cpu/STC-ADC-TRACK/tree/dual-stable-20261023)，标签对应提交 1d4bbad2491c0c1bc7a7a1e43b5674c4dcc48344。
 
-新版说明：[四电感与 1ms 采样](Projects/0041.ADC_track/FOUR_SENSOR_GUIDE.md)。
+详细说明：[项目说明](Projects/0041.ADC_track/README.md)、[速度闭环](Projects/0041.ADC_track/SPEED_LOOP_GUIDE.md)、[四电感](Projects/0041.ADC_track/FOUR_SENSOR_GUIDE.md)、[发车步骤](Projects/0041.ADC_track/STARTUP_CHECKLIST.md)。
 Keil 工程：Projects/0041.ADC_track/MDK/Project_Template.uvproj。
-新版 HEX：Projects/0041.ADC_track/MDK/Objects/Project_Template.hex。
+HEX：Projects/0041.ADC_track/MDK/Objects/Project_Template.hex。
 
-- 两侧横电感 P13/P01 不变；中间同平面纵电感引脚宏必须按实际接线修改，当前配置 P10/P05，需按实际接线核对。
-- 论文 C4 四路加权误差、独立归一化、居中参考和四路失线检测。
-- TIM0 每 1ms 触发整帧非阻塞 ADC 扫描，ADC 中断推进；PID 为 2ms（500Hz）。
-- 舵机已确认 SPT5410LV，控制载波为 330Hz；三值与载波解耦，1 单位始终为 2us。
-- 当前宏初值 Kp=115、Ki=0、Kd=2.15、BASE=2000、CURVE=1000；EEPROM 优先。
-- 蓝牙 9600/8N1、4Hz；保留前 39 列并增加 ADC 整帧/跨周期计数两列。
-- 所有 43 个原库文件和 58 个 Keil 工程引用均保留，原库内容未改。
+- 外侧横电感 P13/P01；前方同平面纵电感当前 P10/P05，以实际接线核对宏。
+- 论文 C4 加权偏差、四路独立归一化及每次上电重新标定。
+- ADC 整帧触发 1ms，转向 PID 2ms，速度闭环 10ms；SPT5410LV 舵机载波 330Hz，历史舵机单位保持 2us。
+- 右后轮 P04/TIM3 计数，P52 沿用原 Encoder 库方向电平；一套速度反馈产生共同 PWM，两电机同值，不差速转向。
+- 电机菜单包含速度设定、速度 PID、动力限幅、左右电机方向。速度目标初值为 0，首次需设置非零 BASE，否则显示 NEED SPEED；单位是 P04 脉冲/10ms。
+- 代码初值：转向 Kp=130、Ki=0、Kd=8.15；速度 Kp=30、Ki=30、Kd=0。速度增益需实车整定。PWM 基础上限 3000、弯道上限 1500、允许最大 4000；有效 EEPROM 优先。
+- 速度目标和速度 PID 支持掉电保存，原 32B 参数记录后扩展 32B SPD1，仍使用原两个 EEPROM 扇区；旧参数兼容读取，旧记录速度目标初始化为 0。
+- 蓝牙 9600/8N1，每 500ms 完整遥测，原 41 列后追加 11 列速度字段，总计 52 列。
+- 运行关闭 OLED，确认失线/故障/手动停止后亮屏。普通弱信号确认 250ms，四路近零确认 120ms。
+- 43 个原库文件全部保留。原 Encoder 接口保留并增加稳定快照，处理计数回绕；原 58 个 Keil 引用保留，application 组新增速度模块后共 60 个引用。
 
-主机完整测试通过（含 6561 组独立公式比较、ADC 滤波/原子整帧/过期关闭、双/四路核心、Flash、菜单、PWM 保护及不同舵机载波换算）。Keil 全量编译 0 错误、0 警告，HEX 与 EEPROM 地址边界验证通过。已确认舵机型号，尚未验证实物 1ms 吞吐及 P74 输出波形；先确认中间引脚、重新标定后再实车验证。
+完整主机回归通过，覆盖实际编码器库、速度闭环负载仿真、同值输出联锁、静态调参电机关闭、Flash 升级和全部 65 个擦写断点。Keil 全量编译 0 错误、0 警告，HEX 不进入 EEPROM 地址范围。软件测试不能替代实车编码器信号、采样吞吐、纠偏方向及速度增益验证。
 
-在 Projects/0041.ADC_track 目录运行 tools/test.ps1、tools/build.ps1；GCC/Keil 环境需正确配置。BASELINE_MANIFEST.json 对应旧标签原文件；FOUR_SENSOR_MANIFEST.json 对应当前分支内容。
-
-2ms 更新保持最低标定采集 0.5 秒（250 帧）、居中 1 秒（500 帧）、电机原加速斜率及原控制保护；连续 ADC 饱和确认约 16ms。已增加真实前台 2ms 调度回归测试。用户已确认 SPT5410LV，PWM 为 330Hz。
-
-2026-10-25 更新：通过发车校验后关闭 OLED，运行中停止绘图与 SPI 刷新；失线、手动停车或其他故障时先停输出，再完整写入故障菜单并亮屏。行驶门槛取 min(保存值,20)，恢复余量 10，四路近零确认 120ms，普通弱信号/分母无效确认 250ms。标定和静态 PID 阈值不变。用户当前左纵 P10、右纵 P05 的配置保留。新增 OLED 总线静默、停车整帧亮屏和 120/250ms 边界测试，完整回归与 Keil 编译均通过；实车响应待验证。
+在 Projects/0041.ADC_track 运行 tools/test.ps1、tools/build.ps1。BASELINE_MANIFEST.json 对应旧双路基线；FOUR_SENSOR_MANIFEST.json 对应当前分支文件。

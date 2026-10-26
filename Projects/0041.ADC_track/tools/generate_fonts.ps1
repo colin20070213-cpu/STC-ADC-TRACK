@@ -1,7 +1,7 @@
 # 使用系统微软雅黑生成原生 16×16 菜单点阵；正常编译无需运行此脚本。
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
-$labels = @('循迹菜单', '电感标定', 'PID调参', '开始运行', '舵机中值', '舵机左限位', '舵机右限位', '居中标定', '速度设定', '恢复PID初值', '标定设置', '舵机设置', '电机设置', '舵机方向', '左电机方向', '右电机方向', '正向', '反向')
+$labels = @('循迹菜单', '电感标定', 'PID调参', '开始运行', '舵机中值', '舵机左限位', '舵机右限位', '居中标定', '速度设定', '恢复PID初值', '标定设置', '舵机设置', '电机设置', '舵机方向', '左电机方向', '右电机方向', '正向', '反向', '速度PID', '动力限幅')
 $chars = [System.Collections.Generic.List[char]]::new()
 foreach ($label in $labels) { foreach ($ch in $label.ToCharArray()) { if (-not $chars.Contains($ch)) { $chars.Add($ch) } } }
 $font = [System.Drawing.Font]::new('Microsoft YaHei', 14, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)

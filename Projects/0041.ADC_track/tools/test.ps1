@@ -26,7 +26,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Four-sensor reference test compilation failed' }
     & '.\MDK\test_four.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Four-sensor reference tests failed' }
-    & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-Wno-format' '-DTRACK_HOST_TEST' '-IUSER/inc' '-Itests' '-I../../Libraries/boards/inc' 'tests/test_app.c' 'USER/src/track_core.c' 'USER/src/track_pid.c' '../../Libraries/boards/src/Font.c' '-o' 'MDK/test_app.exe'
+    & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-Itests/encoder_mocks' '-I../../Libraries/boards/inc' 'tests/test_encoder.c' '../../Libraries/boards/src/Encoder.c' '-o' 'MDK/test_encoder.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'Encoder test compilation failed' }
+    & '.\MDK\test_encoder.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'Encoder tests failed' }
+    & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-DTRACK_HOST_TEST' '-IUSER/inc' 'tests/test_speed.c' 'USER/src/track_speed.c' 'USER/src/track_core.c' 'USER/src/track_pid.c' '-o' 'MDK/test_speed.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'Speed test compilation failed' }
+    & '.\MDK\test_speed.exe'
+    if ($LASTEXITCODE -ne 0) { throw 'Speed tests failed' }
+    & $gcc '-std=c99' '-Wall' '-Wextra' '-Werror' '-Wno-format' '-DTRACK_HOST_TEST' '-IUSER/inc' '-Itests' '-I../../Libraries/boards/inc' 'tests/test_app.c' 'USER/src/track_core.c' 'USER/src/track_pid.c' 'USER/src/track_speed.c' '../../Libraries/boards/src/Font.c' '-o' 'MDK/test_app.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Application test compilation failed' }
     & '.\MDK\test_app.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Application tests failed' }

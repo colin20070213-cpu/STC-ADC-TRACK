@@ -6,6 +6,7 @@
  */
 #include "track_app.h"
 #include "track_hw.h"
+#include "track_speed.h"
 #include "track_font.h"
 #ifdef TRACK_HOST_TEST
 #include "track_app_test_hw.h"
@@ -51,7 +52,7 @@ typedef enum
     LABEL_BODY_CENTER, LABEL_SPEED, LABEL_PID_RESTORE,
     LABEL_CAL_GROUP, LABEL_SERVO_GROUP, LABEL_MOTOR_GROUP,
     LABEL_SERVO_DIRECTION, LABEL_LEFT_DIRECTION, LABEL_RIGHT_DIRECTION,
-    LABEL_NORMAL, LABEL_REVERSED
+    LABEL_NORMAL, LABEL_REVERSED, LABEL_SPEED_PID, LABEL_PWM_LIMIT
 } UILabel;
 
 typedef struct
@@ -78,7 +79,9 @@ static const MenuEntry servo_menu[] =
 };
 static const MenuEntry motor_menu[] =
 {
-    {LABEL_SPEED, TRACK_SPEED},
+    {LABEL_SPEED, TRACK_SPEED_TARGET},
+    {LABEL_SPEED_PID, TRACK_SPEED_PID},
+    {LABEL_PWM_LIMIT, TRACK_SPEED},
     {LABEL_LEFT_DIRECTION, TRACK_LEFT_DIRECTION},
     {LABEL_RIGHT_DIRECTION, TRACK_RIGHT_DIRECTION}
 };
@@ -92,6 +95,13 @@ static TrackParams entry_params; /**< 进入页面时的参数，退出或故障
 static TrackParams edit_params;  /**< 开始一次编辑时的参数，左键撤销本次编辑。 */
 static TrackSensors sensors;
 static TrackControl control;
+static TrackSpeedState speed_control;
+static uint16_t encoder_last_count;
+static uint16_t encoder_elapsed;
+static uint8_t encoder_direction;
+static uint8_t encoder_fresh;
+static uint8_t encoder_ok;
+static uint32_t last_encoder;
 static TrackMode mode;
 static TrackFault fault;
 
@@ -115,7 +125,7 @@ static uint16_t sample_values[TRACK_SENSOR_MAX];
 static uint16_t display_cursor;
 static uint8_t framebuffer[1024]; /**< OLED 128×64，8 个竖向页。 */
 static char text_line[48];
-static char telemetry[320];
+static char telemetry[384];
 static char message[22];          /**< 6×8 字体一行最多显示 21 个 ASCII 字符。 */
 static uint32_t last_control;
 static uint32_t last_display;
@@ -135,6 +145,9 @@ static const char *fault_name(TrackFault reason)
         case TRACK_BAD_PARAMS:  return "PARAM ERR";
         case TRACK_NO_CENTER:   return "NEED CENTER";
         case TRACK_MATH_ERROR:  return "MATH ERROR";
+        case TRACK_NO_SPEED:    return "NEED SPEED";
+        case TRACK_ENCODER_ERROR: return "ENC ERROR";
+        case TRACK_ENCODER_STALL: return "ENC STALL";
         default:                return "OK";
     }
 }
@@ -180,7 +193,7 @@ static uint8_t menu_count(void)
     {
         case MENU_CALIBRATION: return 2;
         case MENU_SERVO:       return 4;
-        case MENU_MOTOR:       return 3;
+        case MENU_MOTOR:       return 5;
         default:               return ROOT_ITEM_COUNT;
     }
 }
@@ -237,7 +250,9 @@ static uint8_t mode_label(void)
         case TRACK_LIMIT_LEFT:      return LABEL_SERVO_LEFT;
         case TRACK_LIMIT_RIGHT:     return LABEL_SERVO_RIGHT;
         case TRACK_BODY_CENTER:     return LABEL_BODY_CENTER;
-        case TRACK_SPEED:           return LABEL_SPEED;
+        case TRACK_SPEED:           return LABEL_PWM_LIMIT;
+        case TRACK_SPEED_TARGET:    return LABEL_SPEED;
+        case TRACK_SPEED_PID:       return LABEL_SPEED_PID;
         case TRACK_SERVO_DIRECTION: return LABEL_SERVO_DIRECTION;
         case TRACK_LEFT_DIRECTION:  return LABEL_LEFT_DIRECTION;
         case TRACK_RIGHT_DIRECTION: return LABEL_RIGHT_DIRECTION;
@@ -393,7 +408,12 @@ static void render_pid_restore(void)
     preview = params;
     if (!editing)
     {
-        TrackParams_RestorePID(&preview);
+        if (mode == TRACK_SPEED_PID) TrackParams_RestoreSpeedPID(&preview);
+        else TrackParams_RestorePID(&preview);
+    }
+    if (mode == TRACK_SPEED_PID)
+    {
+        preview.kp100=preview.speed_kp100;preview.ki100=preview.speed_ki100;preview.kd100=preview.speed_kd100;
     }
     label_at(0, 2, LABEL_PID_RESTORE);
     sprintf(text_line, "Kp:%u.%02u", preview.kp100 / 100, preview.kp100 % 100);
@@ -420,19 +440,28 @@ static void render_pid(void)
         render_pid_restore();
         return;
     }
-    text_at(0, 2, sensors.valid ?
+    if (mode == TRACK_SPEED_PID)
+    {
+        sprintf(text_line, "V:%u/10ms MOTOR OFF", (unsigned int)(speed_control.feedback+0.5f));
+        text_at(0, 2, encoder_ok ? text_line : "ENC ERROR / MOTOR OFF");
+    }
+    else text_at(0, 2, sensors.valid ?
             (control.signal_ok ? "MOTOR OFF / SIG OK" : "MOTOR OFF / NO SIGNAL") :
             "MOTOR OFF / NEED CAL");
     for (item = 0; item < 3; ++item)
     {
-        gain = item == 0 ? params.kp100 : item == 1 ? params.ki100 : params.kd100;
+        if (mode == TRACK_SPEED_PID)
+            gain = item == 0 ? params.speed_kp100 : item == 1 ? params.speed_ki100 : params.speed_kd100;
+        else gain = item == 0 ? params.kp100 : item == 1 ? params.ki100 : params.kd100;
         gain_name = item == 0 ? "Kp" : item == 1 ? "Ki" : "Kd";
         sprintf(text_line, "%c%s:%3u.%02u %s", pid_item == item ? '>' : ' ', gain_name,
                 gain / 100, gain % 100,
                 editing && pid_item == item ? (coarse_step ? "EDIT .10" : "EDIT .01") : "");
         text_at(0, (uint8_t)(item + 3), text_line);
     }
-    sprintf(text_line, "E:%d S:%u%s%s", control.error, control.servo,
+    if (mode == TRACK_SPEED_PID)
+        sprintf(text_line, "TARGET:%u PWM:%u%s", params.speed_base, speed_control.output, params_dirty() ? " *" : "");
+    else sprintf(text_line, "E:%d S:%u%s%s", control.error, control.servo,
             control.saturated ? " LIM" : "", params_dirty() ? " *" : "");
     text_at(0, 6, text_line);
     text_at(0, 7, message[0] ? message :
@@ -442,6 +471,21 @@ static void render_pid(void)
 /** @brief 速度页的百分比来自 PWM，不表示实测轮速；编辑期间输出保持关闭。 */
 static void render_speed(void)
 {
+    if (mode == TRACK_SPEED_TARGET)
+    {
+        sprintf(text_line, "%cBASE:%u", speed_item == 0 ? '>' : ' ', params.speed_base);
+        text_at(0, 2, text_line);
+        sprintf(text_line, "%cCURVE:%u", speed_item == 1 ? '>' : ' ', params.speed_curve);
+        text_at(0, 3, text_line);
+        sprintf(text_line, "NOW:%u pulse/10ms", (unsigned int)(speed_control.feedback+0.5f));
+        text_at(0, 4, text_line);
+        sprintf(text_line, "STEP:%u OFF%s", coarse_step ? 10 : 1, params_dirty() ? " *" : "");
+        text_at(0, 5, text_line);
+        sprintf(text_line, "ENC:%u DIR:%u", encoder_last_count, (unsigned int)encoder_direction);
+        text_at(0, 6, message[0] ? message : (encoder_ok ? text_line : "ENC ERROR"));
+        text_at(0, 7, editing ? "OK:save <:undo >:step" : "^v:pick >:edit <:back");
+        return;
+    }
     sprintf(text_line, "%cBASE:%4u %2u.%02u%%", speed_item == 0 ? '>' : ' ',
             params.base_duty, params.base_duty / 100, params.base_duty % 100);
     text_at(0, 2, text_line);
@@ -537,10 +581,12 @@ static void render_display(void)
     switch (mode)
     {
         case TRACK_CAL:         render_sensor_calibration(); break;
-        case TRACK_PID:         render_pid(); break;
+        case TRACK_PID:
+        case TRACK_SPEED_PID:   render_pid(); break;
         case TRACK_RUN:         render_run(); break;
         case TRACK_BODY_CENTER: render_body_center(); break;
-        case TRACK_SPEED:       render_speed(); break;
+        case TRACK_SPEED:
+        case TRACK_SPEED_TARGET: render_speed(); break;
         case TRACK_SERVO_DIRECTION:
         case TRACK_LEFT_DIRECTION:
         case TRACK_RIGHT_DIRECTION:
@@ -607,6 +653,7 @@ static void open_menu_page(MenuPage page)
 static void return_menu(TrackFault reason)
 {
     TrackHW_Arm(0);
+    TrackSpeed_Stop(&speed_control);
     mode = TRACK_MENU;
     fault = reason;
     display_busy = 0;
@@ -654,6 +701,7 @@ static uint8_t save_params(void)
 static void reset_pid(void)
 {
     TrackControl_Reset(&control, &params);
+    TrackSpeed_Stop(&speed_control);
 }
 
 /** @brief 根据菜单索引进入页面；先关闭输出，再开启所需的舵机模式。 */
@@ -722,6 +770,19 @@ static void enter_menu_item(void)
                 fault = TRACK_BAD_PARAMS;
                 break;
             }
+            if (params.speed_base == 0)
+            {
+                fault = TRACK_NO_SPEED;
+                break;
+            }
+            if (!TrackHW_EncoderSnapshot(&encoder_last_count, &encoder_direction))
+            {
+                fault = TRACK_ENCODER_ERROR;
+                break;
+            }
+            last_encoder = TrackHW_Now();
+            encoder_ok = 1;
+            encoder_fresh = 0;
             /* 先熄屏、取消未完成的分片刷新，再允许执行器工作。 */
             LCD_WrCmd(0xAE);
             display_off = 1;
@@ -742,8 +803,13 @@ static void enter_menu_item(void)
             sensors.center_samples = 0;
             break;
         case TRACK_SPEED:
-            mode = TRACK_SPEED;
+        case TRACK_SPEED_TARGET:
+            mode = target;
             speed_item = 0;
+            break;
+        case TRACK_SPEED_PID:
+            mode = target;
+            pid_item = 0;
             break;
         case TRACK_SERVO_DIRECTION:
         case TRACK_LEFT_DIRECTION:
@@ -768,10 +834,20 @@ static void adjust_param(int8_t direction)
 
     candidate = params;
     step = coarse_step ? 10 : 1;
-    if (mode == TRACK_PID)
+    if (mode == TRACK_SPEED_PID)
+    {
+        selected_value = pid_item == 0 ? &candidate.speed_kp100 :
+                         pid_item == 1 ? &candidate.speed_ki100 : &candidate.speed_kd100;
+    }
+    else if (mode == TRACK_PID)
     {
         selected_value = pid_item == 0 ? &candidate.kp100 :
                          pid_item == 1 ? &candidate.ki100 : &candidate.kd100;
+    }
+    else if (mode == TRACK_SPEED_TARGET)
+    {
+        selected_value = speed_item == 0 ? &candidate.speed_base : &candidate.speed_curve;
+        step = coarse_step ? 10 : 1;
     }
     else if (mode == TRACK_SPEED)
     {
@@ -817,7 +893,8 @@ static void preview_pid_defaults(void)
     TrackParams candidate;
 
     candidate = params;
-    TrackParams_RestorePID(&candidate);
+    if (mode == TRACK_SPEED_PID) TrackParams_RestoreSpeedPID(&candidate);
+    else TrackParams_RestorePID(&candidate);
     if (!TrackParams_Valid(&candidate))
     {
         set_message("PID DEFAULT INVALID");
@@ -855,7 +932,7 @@ static void handle_pid_keys(uint8_t keys)
                 editing = 0;
                 reset_pid();
             }
-            TrackHW_Arm(1);
+            if (mode == TRACK_PID) TrackHW_Arm(1);
         }
         else if (pid_item != PID_ITEM_RESTORE)
         {
@@ -895,7 +972,7 @@ static void handle_pid_keys(uint8_t keys)
     else if (keys & KEY_OK_EVENT)
     {
         save_params();
-        TrackHW_Arm(1);
+        if (mode == TRACK_PID) TrackHW_Arm(1);
     }
 }
 
@@ -1162,8 +1239,10 @@ static void handle_keys(uint8_t keys)
     {
         case TRACK_CAL:         handle_calibration_keys(keys); break;
         case TRACK_BODY_CENTER: handle_body_keys(keys); break;
-        case TRACK_PID:         handle_pid_keys(keys); break;
-        case TRACK_SPEED:       handle_speed_keys(keys); break;
+        case TRACK_PID:
+        case TRACK_SPEED_PID:   handle_pid_keys(keys); break;
+        case TRACK_SPEED:
+        case TRACK_SPEED_TARGET: handle_speed_keys(keys); break;
         case TRACK_SERVO_DIRECTION:
         case TRACK_LEFT_DIRECTION:
         case TRACK_RIGHT_DIRECTION:
@@ -1194,6 +1273,29 @@ static void handle_adc_failure(void)
     }
 }
 
+/** @brief 10ms 读取原编码器库快照；前进测速使用脉冲幅值，方向原电平单独遥测。 */
+static void encoder_task(uint32_t now)
+{
+    uint16_t count;
+    uint8_t direction;
+    uint32_t elapsed = now - last_encoder;
+
+    encoder_fresh = 0;
+    if (elapsed < TRACK_SPEED_PERIOD_MS) return;
+    if (!TrackHW_EncoderSnapshot(&count, &direction))
+    {
+        encoder_ok = 0;
+        last_encoder = now;
+        return;
+    }
+    encoder_direction = direction;
+    encoder_elapsed = elapsed > 65535UL ? 65535U : (uint16_t)elapsed;
+    encoder_ok = TrackSpeed_Measure(&speed_control, (uint16_t)(count - encoder_last_count), encoder_elapsed);
+    encoder_last_count = count;
+    last_encoder = now;
+    encoder_fresh = encoder_ok;
+}
+
 /** @brief 2ms 控制帧读取最新 1ms ADC 扫描；电机使能只可能发生在 TRACK_RUN。 */
 static void control_task(void)
 {
@@ -1205,6 +1307,12 @@ static void control_task(void)
     {
         params = entry_params;
         return_menu(TRACK_TIMEOUT);
+        return;
+    }
+    encoder_task(TrackHW_Now());
+    if (mode == TRACK_RUN && !encoder_ok)
+    {
+        return_menu(TRACK_ENCODER_ERROR);
         return;
     }
     if (!TrackHW_Sample(sample_values))
@@ -1224,7 +1332,7 @@ static void control_task(void)
         TrackBodyCenter_Sample(&sensors, &params);
         return;
     }
-    if (mode == TRACK_SPEED || is_direction_mode())
+    if (mode == TRACK_SPEED || mode == TRACK_SPEED_TARGET || mode == TRACK_SPEED_PID || is_direction_mode())
     {
         TrackHW_Stop();
         return;
@@ -1266,6 +1374,30 @@ static void control_task(void)
             }
             return;
         }
+        if (mode == TRACK_RUN)
+        {
+            if (!control.signal_ok)
+            {
+                TrackSpeed_Stop(&speed_control); /* 弱信号不能被速度积分顶开限速。 */
+            }
+            else
+            {
+                uint16_t limit = TrackSpeed_Limit(&params, control.error, control.crossing);
+                if (encoder_fresh)
+                {
+                    result = TrackSpeed_Calculate(&speed_control, &params,
+                        TrackSpeed_Target(&params, control.error, control.crossing), limit, encoder_elapsed);
+                    if (result != TRACK_OK)
+                    {
+                        return_menu(result);
+                        return;
+                    }
+                }
+                if (speed_control.output > limit) speed_control.output = limit;
+                control.left_motor = speed_control.output;
+                control.right_motor = speed_control.output; /* 单反馈、共同动力，禁止差速转向。 */
+            }
+        }
         TrackHW_Set(control.servo, control.left_motor, control.right_motor, mode == TRACK_RUN);
     }
     else if (mode == TRACK_CENTER || mode == TRACK_LIMIT_LEFT || mode == TRACK_LIMIT_RIGHT)
@@ -1279,7 +1411,7 @@ static void control_task(void)
     }
 }
 
-/** @brief 输出参数快照和 4Hz PID 遥测；控制为 2ms，串口拥塞时丢帧。 */
+/** @brief 输出参数快照和 2Hz 转向/速度遥测；控制为 2ms，串口拥塞时丢帧。 */
 static void telemetry_task(uint32_t now)
 {
     uint16_t dropped_frames;
@@ -1290,22 +1422,24 @@ static void telemetry_task(uint32_t now)
 
     if (uart_snapshot_pending)
     {
-        sprintf(telemetry,
+        length = sprintf(telemetry,
                 "#CFG,mode=%u,kp100=%u,ki100=%u,kd100=%u,center=%u,left=%u,right=%u,"
                 "cal=%u,bodyRef=%d,bodyCal=%u,base=%u,curve=%u,"
-                "servoDir=%d,leftRev=%u,rightRev=%u,menu=%u\r\n",
+                "servoDir=%d,leftRev=%u,rightRev=%u,menu=%u",
                 (unsigned int)mode, params.kp100, params.ki100, params.kd100,
                 params.center, params.left, params.right, (unsigned int)sensors.valid,
                 sensors.center_bias, (unsigned int)sensors.center_valid,
                 params.base_duty, params.curve_duty, params.servo_left_sign,
                 (unsigned int)params.left_reverse, (unsigned int)params.right_reverse,
                 (unsigned int)menu_page);
+        sprintf(telemetry + length, ",speedBase=%u,speedCurve=%u,speedKp=%u,speedKi=%u,speedKd=%u\r\n",
+                params.speed_base, params.speed_curve, params.speed_kp100, params.speed_ki100, params.speed_kd100);
         if (TrackUART_Queue(telemetry))
         {
             uart_snapshot_pending = 0;
         }
     }
-    if ((mode != TRACK_PID && mode != TRACK_RUN) ||
+    if ((mode != TRACK_PID && mode != TRACK_SPEED_PID && mode != TRACK_RUN) ||
         (uint32_t)(now - last_telemetry) < TRACK_TELEMETRY_MS)
     {
         return;
@@ -1336,6 +1470,14 @@ static void telemetry_task(uint32_t now)
             (unsigned int)params.left_reverse, (unsigned int)params.right_reverse,
             (int)TRACK_STEERING_TARGET1000, TrackSensors_Feedback(&sensors),
             adc_frames, adc_overruns);
+    length = (uint16_t)strlen(telemetry);
+    /* 保留原 41 列顺序，覆盖原 CRLF 后追加速度闭环 11 列。 */
+    sprintf(telemetry + length - 2, ",%ld,%ld,%ld,%u,%u,%u,%ld,%ld,%ld,%u,%u\r\n",
+            (long)(speed_control.target * 100.0f), (long)(speed_control.feedback * 100.0f),
+            (long)(speed_control.raw_feedback * 100.0f), params.speed_kp100, params.speed_ki100,
+            params.speed_kd100, (long)(speed_control.p_term * 10.0f),
+            (long)(speed_control.integral * 10.0f), (long)(speed_control.d_term * 10.0f),
+            speed_control.output, (unsigned int)encoder_direction);
     TrackUART_Queue(telemetry);
 }
 
@@ -1368,13 +1510,17 @@ void TrackApp_Init(void)
     startup_release_since = TrackHW_Now();
     TrackHW_Keys();
     last_control = TrackHW_Now();
+    last_encoder = last_control;
+    encoder_ok = TrackHW_EncoderSnapshot(&encoder_last_count, &encoder_direction);
+    encoder_fresh = 0;
+    speed_control.measured = 0;
     last_display = last_control - TRACK_DISPLAY_PERIOD_MS;
     last_telemetry = last_control;
     TrackUART_Queue(
         "#ms,mode,rawL,rawR,raw3,raw4,nL,nR,n3,n4,e1000,kp100,ki100,kd100,"
         "P10,I10,D10,U10,servo,center,left,right,pwmL,pwmR,signal,fault,sat,drop,cal,"
         "bodyRef,bodyCal,measuredE,base,curve,servoDir,leftRev,rightRev,"
-        "target1000,feedback1000,adcFrames,adcOverruns\r\n");
+        "target1000,feedback1000,adcFrames,adcOverruns,speedTarget100,speedFeedback100,speedRaw100,speedKp100,speedKi100,speedKd100,speedP10,speedI10,speedD10,speedPWM,encDir\r\n");
     uart_snapshot_pending = 1;
     /* 33.1776MHz 下约 1.5s，看门狗只在前台主循环中喂。 */
     WDT_CONTR = 0x26;

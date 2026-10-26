@@ -8,13 +8,13 @@
 
 /* PID 初值直接填写实际值；例如 40.00f 表示 Kp=40.00。 */
 #ifndef TRACK_PID_DEFAULT_KP
-#define TRACK_PID_DEFAULT_KP    115.00f
+#define TRACK_PID_DEFAULT_KP    130.00f
 #endif
 #ifndef TRACK_PID_DEFAULT_KI
 #define TRACK_PID_DEFAULT_KI     0.00f
 #endif
 #ifndef TRACK_PID_DEFAULT_KD
-#define TRACK_PID_DEFAULT_KD     2.15f
+#define TRACK_PID_DEFAULT_KD     8.15f
 #endif
 #define TRACK_PID_KP_MAX_X100   50000U /* Kp 上限 500.00；代码初值与现场保存值可分别调整。 */
 #define TRACK_PID_KI_MAX_X100    2000U
@@ -50,7 +50,7 @@
 #define TRACK_CONTROL_TIMEOUT  20     /* 无输出更新时的中断截止时间，单位 ms。 */
 #define TRACK_DISPLAY_PERIOD_MS 100   /* OLED 重绘周期，单位 ms。 */
 #define TRACK_UART_BAUD         9600UL /* 与蓝牙模块串口波特率保持一致，8N1。 */
-#define TRACK_TELEMETRY_MS      250    /* 完整 CSV 按 4Hz 发送，为 9600 串口留出余量。 */
+#define TRACK_TELEMETRY_MS      500    /* 增加速度闭环字段后按 2Hz 发送，适配 9600 串口。 */
 /* 极值与车身居中标定；强度标度为 0～1000，ADC 原始值为 0～4095。 */
 #define TRACK_CAL_MIN_SAMPLES  ((500U + TRACK_PERIOD_MS - 1U) / TRACK_PERIOD_MS) /* 至少约 0.5 秒。 */
 #define TRACK_CAL_MIN_SPAN     100    /* 放大板正常时，每路原始 ADC 的最低有效跨度。 */
@@ -80,14 +80,39 @@
 #define TRACK_MOTOR_SWAP       0      /* 两组电机对调：0=否，1=是。 */
 #define TRACK_LEFT_REVERSE     0      /* 默认逻辑左电机方向，菜单可覆盖并保存。 */
 #define TRACK_RIGHT_REVERSE    0      /* 默认逻辑右电机方向，菜单可覆盖并保存。 */
-#define TRACK_BASE_DUTY        2000   /* 无有效 Flash 时基础动力 20.00%。 */
-#define TRACK_CURVE_MIN_DUTY   1000   /* 无有效 Flash 时弯道最低动力 10.00%。 */
+#define TRACK_BASE_DUTY        3000   /* 速度闭环直线动力上限，当前初值 30.00%。 */
+#define TRACK_CURVE_MIN_DUTY   1500   /* 速度闭环弯道动力上限，当前初值 15.00%。 */
 #define TRACK_DUTY_MAX         4000   /* 菜单校验和实际输出共同上限 40.00%。 */
 #define TRACK_SPEED_FINE_STEP  10U  /* 速度页精调：0.10% 占空比。 */
 #define TRACK_SPEED_COARSE_STEP 100U /* 速度页粗调：1.00% 占空比。 */
 #define TRACK_MOTOR_RAMP       (2U * TRACK_PERIOD_MS) /* 每毫秒 2 单位，2ms 每次增加 4。 */
 #define TRACK_LEFT_TRIM        0     /* 左轮开环动力补偿，可正可负。 */
 #define TRACK_RIGHT_TRIM       0     /* 右轮开环动力补偿，可正可负。 */
+/* 右后轮单编码器速度环。速度单位为 P04 计数/10ms；未知每圈计数时不换算 m/s。
+ * 默认目标为 0，需在“电机设置→速度设定”设置非零基础速度后发车。
+ * 原 BASE/CURVE PWM 参数继续作为直线/弯道动力上限，不能当作速度值迁移。 */
+#define TRACK_SPEED_PERIOD_MS       10U
+#define TRACK_SPEED_BASE_DEFAULT    0U
+#define TRACK_SPEED_CURVE_DEFAULT   0U
+#define TRACK_SPEED_TARGET_MAX      1000U
+#ifndef TRACK_SPEED_DEFAULT_KP
+#define TRACK_SPEED_DEFAULT_KP      30.00f
+#endif
+#ifndef TRACK_SPEED_DEFAULT_KI
+#define TRACK_SPEED_DEFAULT_KI      30.00f
+#endif
+#ifndef TRACK_SPEED_DEFAULT_KD
+#define TRACK_SPEED_DEFAULT_KD       0.00f
+#endif
+#define TRACK_SPEED_GAIN_MAX_X100    50000U
+#define TRACK_SPEED_FEEDBACK_ALPHA   0.50f
+#define TRACK_SPEED_D_FILTER         0.25f
+#define TRACK_SPEED_RAMP_PER_SECOND  25.0f /* 每秒增加的目标计数/10ms。 */
+#define TRACK_SPEED_PWM_RISE_PER_MS  2U
+#define TRACK_SPEED_STALL_DUTY       1000U
+#define TRACK_SPEED_STALL_MS         1000U
+#define TRACK_ENCODER_MAX_PER_10MS   2000U /* 单边沿计数合理上界，防止异常读数。 */
+
 /* 失线与十字判据；使用未扣除居中参考的电感强度。 */
 #define TRACK_LOST_SUM_MIN     1U    /* 保存参数的合法下界；0 会使全零信号无法触发失线。 */
 #define TRACK_LOST_SUM_MAX     500U  /* 保存参数的合法上界，与代码初值分开定义。 */
@@ -108,6 +133,12 @@
 #define TRACK_STORE_PAGE_SIZE  512U
 #define TRACK_TX_SIZE          512U
 
+#if TRACK_LEFT_TRIM != TRACK_RIGHT_TRIM
+#error Single-encoder common speed control requires equal left and right trim
+#endif
+#if TRACK_SPEED_PERIOD_MS < TRACK_PERIOD_MS || TRACK_SPEED_PERIOD_MS % TRACK_PERIOD_MS != 0
+#error Invalid speed loop period
+#endif
 #if TRACK_SERVO_FREQUENCY < 50 || TRACK_SERVO_FREQUENCY > 500
 #error Servo frequency must be within 50 to 500 Hz and supported by the actual servo
 #endif

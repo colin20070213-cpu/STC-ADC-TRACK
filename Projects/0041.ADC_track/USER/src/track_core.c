@@ -28,9 +28,19 @@ void TrackParams_RestorePID(TrackParams *params)
     params->kd100 = (uint16_t)(TRACK_PID_DEFAULT_KD * 100.0f + 0.5f);
 }
 
+void TrackParams_RestoreSpeedPID(TrackParams *params)
+{
+    params->speed_kp100 = (uint16_t)(TRACK_SPEED_DEFAULT_KP * 100.0f + 0.5f);
+    params->speed_ki100 = (uint16_t)(TRACK_SPEED_DEFAULT_KI * 100.0f + 0.5f);
+    params->speed_kd100 = (uint16_t)(TRACK_SPEED_DEFAULT_KD * 100.0f + 0.5f);
+}
+
 void TrackParams_Default(TrackParams *params)
 {
     TrackParams_RestorePID(params);
+    TrackParams_RestoreSpeedPID(params);
+    params->speed_base = TRACK_SPEED_BASE_DEFAULT;
+    params->speed_curve = TRACK_SPEED_CURVE_DEFAULT;
     params->center = TRACK_SERVO_DEFAULT_CENTER;
     params->left = TRACK_SERVO_LEFT_SIGN == 1 ?
                    TRACK_SERVO_DEFAULT_LEFT : TRACK_SERVO_DEFAULT_RIGHT;
@@ -46,6 +56,12 @@ void TrackParams_Default(TrackParams *params)
 
 uint8_t TrackParams_Valid(const TrackParams *params)
 {
+    if (params->speed_base > TRACK_SPEED_TARGET_MAX || params->speed_curve > params->speed_base ||
+        params->speed_kp100 > TRACK_SPEED_GAIN_MAX_X100 ||
+        params->speed_ki100 > TRACK_SPEED_GAIN_MAX_X100 || params->speed_kd100 > TRACK_SPEED_GAIN_MAX_X100)
+    {
+        return 0;
+    }
     if ((params->servo_left_sign != 1 && params->servo_left_sign != -1) ||
         params->left_reverse > 1 || params->right_reverse > 1)
     {
@@ -579,33 +595,16 @@ static int16_t update_crossing(TrackControl *control, uint16_t signal_sum,
     return error;
 }
 
-/** @brief 根据偏差降低动力，加速限斜率；drive=0 时两轮命令始终为零。 */
-static void update_motor_duty(TrackControl *control, const TrackParams *params, uint8_t drive)
+/** @brief 静态转向调参禁止电机；正常行驶的公共动力由独立速度环生成。 */
+static void enforce_motor_interlock(TrackControl *control, uint8_t drive)
 {
-    uint16_t target_duty;
-    uint16_t absolute_error;
-
     if (!drive)
     {
         control->left_motor = 0;
         control->right_motor = 0;
-        return;
     }
-    absolute_error = control->error < 0 ? -control->error : control->error;
-    target_duty = params->base_duty -
-        (uint16_t)((uint32_t)(params->base_duty - params->curve_duty) * absolute_error / 1000UL);
-    if (control->crossing)
-    {
-        target_duty = params->curve_duty;
-    }
-    if (target_duty > control->left_motor + TRACK_MOTOR_RAMP)
-    {
-        target_duty = control->left_motor + TRACK_MOTOR_RAMP;
-    }
-    control->left_motor = (uint16_t)clamp16((int32_t)target_duty + TRACK_LEFT_TRIM,
-                                           0, TRACK_DUTY_MAX);
-    control->right_motor = (uint16_t)clamp16((int32_t)target_duty + TRACK_RIGHT_TRIM,
-                                            0, TRACK_DUTY_MAX);
+    /* drive=1 时保留上一实际输出，供下一帧弱信号保持/限速使用。
+       应用层随后以速度环共同输出覆盖左右命令，不再计算旧开环 PWM。 */
 }
 
 /** @brief 连续弱信号计时及限速保持；不依据弱信号重新计算舵机位置。 */
@@ -727,7 +726,7 @@ TrackFault TrackControl_Step(TrackControl *control, const TrackSensors *sensors,
     control->d_x10 = (int16_t)(control->steering_pid.d_term * 10.0f);
     control->unclamped_x10 = (int16_t)(control->steering_pid.unclamped * 10.0f);
     control->saturated = control->steering_pid.saturated;
-    update_motor_duty(control, params, drive);
+    enforce_motor_interlock(control, drive);
     return TRACK_OK;
 }
 
@@ -796,6 +795,7 @@ uint8_t TrackRecord_Decode(const uint8_t *record, TrackParams *params, uint32_t 
     {
         return 0;
     }
+    TrackParams_Default(&candidate); /* 旧记录的新速度字段使用代码初值，不把旧 PWM 当速度。 */
     candidate.kp100 = read_u16(record + 8);
     candidate.ki100 = read_u16(record + 10);
     candidate.kd100 = read_u16(record + 12);

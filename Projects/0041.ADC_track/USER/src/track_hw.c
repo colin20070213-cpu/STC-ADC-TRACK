@@ -13,6 +13,7 @@
 #include "CNU_PIE_PWM.h"
 #include "CNU_PIE_TIMER.h"
 #include "CNU_PIE_UART.h"
+#include "Encoder.h"
 #endif
 
 volatile uint32_t track_milliseconds;
@@ -320,6 +321,7 @@ void TrackHW_Init(void)
     PADCH = 0;
     EADC = 1;
     adc_enabled = 1;
+    Encoder_Init(); /* TIM3/P04 计数，P52 方向；不占用 TIM0 时基或 TIM1 串口。 */
     UART_Init(UART_1, UART1_RX_P43, UART1_TX_P44, TRACK_UART_BAUD, TIM1);
     /* 库的 TIM0 清标志实现存在 TF1 操作，本工程中断入口显式清 TF0。 */
     PIT_Timer_Ms(TIM0, 1);
@@ -385,7 +387,8 @@ void TrackHW_Set(uint16_t servo, uint16_t left, uint16_t right, uint8_t motor_en
     uint8_t left_reversed;
     uint8_t right_reversed;
 
-    if (servo < TRACK_SERVO_ABS_MIN || servo > TRACK_SERVO_ABS_MAX ||
+    if ((motor_enable && left != right) ||
+        servo < TRACK_SERVO_ABS_MIN || servo > TRACK_SERVO_ABS_MAX ||
         left > TRACK_DUTY_MAX || right > TRACK_DUTY_MAX)
     {
         TrackHW_Stop();
@@ -442,6 +445,11 @@ void TrackHW_Set(uint16_t servo, uint16_t left, uint16_t right, uint8_t motor_en
         track_guard_age = 0;
     }
     EA = previous_irq;
+}
+
+uint8_t TrackHW_EncoderSnapshot(uint16_t *count, uint8_t *direction)
+{
+    return Encoder_Snapshot(count, direction);
 }
 
 void TrackHW_FeedWatchdog(void)

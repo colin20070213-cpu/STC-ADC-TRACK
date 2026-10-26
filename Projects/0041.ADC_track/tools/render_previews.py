@@ -6,7 +6,7 @@ import zlib
 root = Path(__file__).resolve().parent.parent/'MDK'
 names = ['menu-1','menu-2','cal-menu','servo-menu-1','servo-menu-2','menu-3',
          'cal','body-capture','body-ready','pid','pid-restore','pid-confirm',
-         'servo-direction','left-direction','right-direction','speed','servo','run','lost']
+         'servo-direction','left-direction','right-direction','speed-target','speed-pid','speed','servo','run','lost']
 scale, gap = 4, 12
 row_count = (len(names)+2)//3
 width, height = 3*128*scale+4*gap, row_count*64*scale+(row_count+1)*gap

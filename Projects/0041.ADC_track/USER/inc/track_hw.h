@@ -51,6 +51,8 @@ uint8_t TrackHW_Keys(void);
 uint8_t TrackHW_Sample(uint16_t *values);
 /** @brief 喂硬件看门狗；不从周期中断持续喂狗。 */
 void TrackHW_FeedWatchdog(void);
+/** @brief 复用原库 P04/P52 编码器快照；失败返回 0。 */
+uint8_t TrackHW_EncoderSnapshot(uint16_t *count, uint8_t *direction);
 /** @brief 读取最新有效 Flash 记录；无记录时加载代码初值并返回 0。 */
 uint8_t TrackStore_Load(TrackParams *params);
 /** @brief 最近一次保存结果，用于区分参数、擦除、写入及回读故障。 */

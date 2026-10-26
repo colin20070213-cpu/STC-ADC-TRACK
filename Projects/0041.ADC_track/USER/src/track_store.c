@@ -1,7 +1,7 @@
 /**
  * @file    track_store.c
  * @brief   双槽 Flash 参数保存：CRC 校验、交替写入、最后提交、写后回读。
- * @note    32 字节 v2 记录兼容读取旧版 v1。PID、方向、舵机、动力统一保存；
+ * @note    32 字节 v2 基础记录后追加 32 字节速度扩展；兼容读取旧版 v1/v2。PID、方向、舵机、动力统一保存；
  *          电感量程和车身居中参考不写 Flash。
  */
 #include "track_hw.h"
@@ -11,6 +11,7 @@
 #endif
 
 #define STORE_SLOT_NONE 255U
+#define STORE_TOTAL_BYTES 64U /* 前 32 字节保留 v2，后 32 字节为速度扩展，最后提交前段标记。 */
 #define IAP_READ        1U
 #define IAP_PROGRAM     2U
 #define IAP_ERASE       3U
@@ -18,8 +19,8 @@
 
 static uint8_t store_active = STORE_SLOT_NONE;
 static uint32_t store_sequence;
-static uint8_t record_a[TRACK_RECORD_BYTES];
-static uint8_t record_b[TRACK_RECORD_BYTES];
+static uint8_t record_a[STORE_TOTAL_BYTES];
+static uint8_t record_b[STORE_TOTAL_BYTES];
 static TrackStoreError store_error;
 
 #if defined(TRACK_HOST_TEST) && !defined(TRACK_IAP_REGISTER_TEST)
@@ -87,12 +88,70 @@ TrackStoreError TrackStore_LastError(void)
     return store_error;
 }
 
+static void store_u16(uint8_t *buffer, uint16_t value)
+{
+    buffer[0] = (uint8_t)value;
+    buffer[1] = (uint8_t)(value >> 8);
+}
+
+static uint16_t load_u16(const uint8_t *buffer)
+{
+    return (uint16_t)buffer[0] | ((uint16_t)buffer[1] << 8);
+}
+
+/** @brief 在原 v2 后追加独立 CRC 扩展；与原序号、原 CRC 绑定。 */
+static void encode_store_record(uint8_t *record, const TrackParams *params, uint32_t sequence)
+{
+    TrackRecord_Encode(record, params, sequence);
+    memset(record + 32, 0xff, 32);
+    memcpy(record + 32, "SPD1", 4);
+    memcpy(record + 36, record + 4, 4);
+    store_u16(record + 40, params->speed_base);
+    store_u16(record + 42, params->speed_curve);
+    store_u16(record + 44, params->speed_kp100);
+    store_u16(record + 46, params->speed_ki100);
+    store_u16(record + 48, params->speed_kd100);
+    memcpy(record + 50, record + 28, 2);
+    store_u16(record + 60, TrackCRC16(record + 32, 28));
+    record[63] = 0x5a;
+}
+
+/** @brief 旧扇区后半全 FF 则沿用速度初值；扩展损坏不能当成合法新记录。 */
+static uint8_t decode_store_record(const uint8_t *record, TrackParams *params, uint32_t *sequence)
+{
+    TrackParams candidate;
+    uint32_t candidate_sequence;
+    uint8_t index;
+    uint8_t legacy = 1;
+
+    if (!TrackRecord_Decode(record, &candidate, &candidate_sequence)) return 0;
+    for (index = 32; index < STORE_TOTAL_BYTES; ++index)
+    {
+        if (record[index] != 0xff) legacy = 0;
+    }
+    if (!legacy)
+    {
+        if (memcmp(record + 32, "SPD1", 4) || memcmp(record + 36, record + 4, 4) ||
+            memcmp(record + 50, record + 28, 2) || record[63] != 0x5a ||
+            load_u16(record + 60) != TrackCRC16(record + 32, 28)) return 0;
+        candidate.speed_base = load_u16(record + 40);
+        candidate.speed_curve = load_u16(record + 42);
+        candidate.speed_kp100 = load_u16(record + 44);
+        candidate.speed_ki100 = load_u16(record + 46);
+        candidate.speed_kd100 = load_u16(record + 48);
+        if (!TrackParams_Valid(&candidate)) return 0;
+    }
+    *params = candidate;
+    *sequence = candidate_sequence;
+    return 1;
+}
+
 /** @brief 读取完整记录，任意字节读失败立即返回 0。 */
 static uint8_t read_record(uint32_t address, uint8_t *buffer)
 {
     uint8_t index;
 
-    for (index = 0; index < TRACK_RECORD_BYTES; ++index)
+    for (index = 0; index < STORE_TOTAL_BYTES; ++index)
     {
         if (!iap_command(address + index, IAP_READ, 0xFF, buffer + index))
         {
@@ -115,9 +174,9 @@ uint8_t TrackStore_Load(TrackParams *params)
     store_active = STORE_SLOT_NONE;
     store_sequence = 0;
     valid_a = read_record(TRACK_STORE_SLOT_A, record_a) &&
-              TrackRecord_Decode(record_a, &params_a, &sequence_a);
+              decode_store_record(record_a, &params_a, &sequence_a);
     valid_b = read_record(TRACK_STORE_SLOT_B, record_b) &&
-              TrackRecord_Decode(record_b, &params_b, &sequence_b);
+              decode_store_record(record_b, &params_b, &sequence_b);
     if (valid_b && (!valid_a || TrackSequence_Newer(sequence_b, sequence_a)))
     {
         *params = params_b;
@@ -159,10 +218,10 @@ uint8_t TrackStore_Save(const TrackParams *params)
     }
     if (store_active != STORE_SLOT_NONE)
     {
-        TrackRecord_Encode(record_a, params, store_sequence);
+        encode_store_record(record_a, params, store_sequence);
         address = store_active ? TRACK_STORE_SLOT_B : TRACK_STORE_SLOT_A;
         if (read_record(address, record_b) &&
-            !memcmp(record_a, record_b, TRACK_RECORD_BYTES))
+            !memcmp(record_a, record_b, STORE_TOTAL_BYTES))
         {
             return 1; /* 参数没有改变，不消耗一次 Flash 擦写。 */
         }
@@ -170,15 +229,16 @@ uint8_t TrackStore_Save(const TrackParams *params)
     TrackHW_Stop();
     target_slot = store_active == 0 ? 1 : 0;
     address = target_slot ? TRACK_STORE_SLOT_B : TRACK_STORE_SLOT_A;
-    TrackRecord_Encode(record_a, params, store_sequence + 1);
+    encode_store_record(record_a, params, store_sequence + 1);
     if (!iap_command(address, IAP_ERASE, 0xFF, &ignored))
     {
         store_error = TRACK_STORE_ERASE;
         return 0;
     }
     /* 只擦写另一槽；即使中途掉电，之前的有效记录仍然保留。 */
-    for (index = 0; index < TRACK_RECORD_BYTES - 1; ++index)
+    for (index = 0; index < STORE_TOTAL_BYTES; ++index)
     {
+        if (index == 31) continue; /* 原有效标记仍最后写，保证基础参数和扩展同次提交。 */
         if (!iap_command(address + index, IAP_PROGRAM, record_a[index], &ignored))
         {
             store_error = TRACK_STORE_WRITE;
@@ -194,8 +254,8 @@ uint8_t TrackStore_Save(const TrackParams *params)
     {
         return 0;
     }
-    if (memcmp(record_a, record_b, TRACK_RECORD_BYTES) ||
-        !TrackRecord_Decode(record_b, &verified_params, &verified_sequence))
+    if (memcmp(record_a, record_b, STORE_TOTAL_BYTES) ||
+        !decode_store_record(record_b, &verified_params, &verified_sequence))
     {
         store_error = TRACK_STORE_VERIFY;
         return 0;

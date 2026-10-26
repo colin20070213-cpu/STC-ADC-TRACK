@@ -260,7 +260,7 @@ static void loss_confirmation_tests(void)
     TrackParams params;
     TrackSensors sensors;
     TrackControl control;
-    unsigned n, elapsed, index;
+    unsigned elapsed, index;
     uint16_t held_servo;
     const uint16_t cases[][3]={{0,0,120},
         {TRACK_HARD_LOST_EACH-1,TRACK_HARD_LOST_EACH-1,120},
@@ -272,7 +272,8 @@ static void loss_confirmation_tests(void)
     memset(&sensors,0,sizeof(sensors));sensors.valid=1;
     sensors.norm[0]=sensors.norm[1]=500;
     TrackControl_Reset(&control,&params);
-    for(n=0;n<TRACK_DUTY_MAX/TRACK_MOTOR_RAMP+1;n++)assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
+    control.left_motor=control.right_motor=4000; /* 上一周期实际公共输出。 */
+    assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
     assert(control.left_motor==4000 && control.right_motor==4000);
     sensors.norm[0]=800;sensors.norm[1]=200;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
@@ -286,7 +287,7 @@ static void loss_confirmation_tests(void)
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && control.weak_ms==2*TRACK_PERIOD_MS);
     sensors.norm[0]=sensors.norm[1]=15;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && control.signal_ok);
-    assert(!control.weak_ms && !control.zero_ms && control.left_motor==600+TRACK_MOTOR_RAMP);
+    assert(!control.weak_ms && !control.zero_ms && control.left_motor==600);
 
     for(index=0;index<sizeof(cases)/sizeof(cases[0]);index++)
     {
@@ -330,7 +331,7 @@ static void store_tests(void)
     mutations=0;fail_after=0;
     assert(TrackStore_Save(&q)); assert(mutations==0); /* Unchanged: no erase. */
     fail_after=-1; memcpy(baseline,flash_memory,1024);
-    for(cut=0;cut<33;cut++) {
+    for(cut=0;cut<65;cut++) {
         memcpy(flash_memory,baseline,1024);fail_after=-1;TrackStore_Load(&p);
         p.kp100=4100;fail_after=cut;mutations=0;
         assert(!TrackStore_Save(&p)); /* Failure at every erase/program boundary. */
@@ -351,6 +352,20 @@ static void store_tests(void)
     p.lost_sum=500;assert(TrackParams_Valid(&p));
     p.lost_sum=40;
     puts("PASS: loss threshold 40 and speed 4000 persist; invalid thresholds are rejected");
+    p.speed_base=20;p.speed_curve=10;p.speed_kp100=1234;p.speed_ki100=5678;p.speed_kd100=89;
+    assert(TrackStore_Save(&p));
+    assert(TrackStore_Load(&q) && q.speed_base==20 && q.speed_curve==10 &&
+           q.speed_kp100==1234 && q.speed_ki100==5678 && q.speed_kd100==89);
+    memcpy(baseline,flash_memory,1024);
+    for(cut=0;cut<65;cut++)
+    {
+        memcpy(flash_memory,baseline,1024);fail_after=-1;assert(TrackStore_Load(&p));
+        p.speed_base=30;p.speed_ki100=6000;mutations=0;fail_after=cut;
+        assert(!TrackStore_Save(&p));
+        fail_after=-1;assert(TrackStore_Load(&q) && q.speed_base==20 && q.speed_ki100==5678);
+    }
+    p=q;
+    puts("PASS: speed targets/gains persist atomically with legacy controls across all 65 power-cut points");
     track_guard_armed=1;p.kp100=4300;assert(!TrackStore_Save(&p));track_guard_armed=0;
     assert(stops>0);
 }

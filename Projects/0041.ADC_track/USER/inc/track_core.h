@@ -25,7 +25,9 @@ typedef enum
     TRACK_SPEED,
     TRACK_SERVO_DIRECTION,
     TRACK_LEFT_DIRECTION,
-    TRACK_RIGHT_DIRECTION
+    TRACK_RIGHT_DIRECTION,
+    TRACK_SPEED_TARGET,
+    TRACK_SPEED_PID
 } TrackMode;
 
 /** @brief 停车/启动失败原因，与串口 fault 字段对应。 */
@@ -39,7 +41,10 @@ typedef enum
     TRACK_MANUAL_STOP,
     TRACK_BAD_PARAMS,
     TRACK_NO_CENTER,
-    TRACK_MATH_ERROR
+    TRACK_MATH_ERROR,
+    TRACK_NO_SPEED,
+    TRACK_ENCODER_ERROR,
+    TRACK_ENCODER_STALL
 } TrackFault;
 
 /** @brief 车身居中采集状态；采集失败不覆盖原有效参考。 */
@@ -69,6 +74,11 @@ typedef struct
     int16_t servo_left_sign; /**< +1=占空比增大向左，-1=占空比减小向左。 */
     uint8_t left_reverse;    /**< 逻辑左电机反向开关，0=正向，1=反向。 */
     uint8_t right_reverse;   /**< 逻辑右电机反向开关，0=正向，1=反向。 */
+    uint16_t speed_base;     /**< 基础目标，P04 计数/10ms；0 表示未设置。 */
+    uint16_t speed_curve;    /**< 大偏差时的目标速度，不大于 speed_base。 */
+    uint16_t speed_kp100;    /**< 独立速度环 Kp ×100。 */
+    uint16_t speed_ki100;    /**< 独立速度环 Ki ×100。 */
+    uint16_t speed_kd100;    /**< 独立速度环 Kd ×100，默认 0。 */
 } TrackParams;
 
 /** @brief 电感测量、极值标定及车身参考，全部仅保存在 RAM。 */
@@ -120,6 +130,8 @@ void TrackParams_Default(TrackParams *params);
 
 /** @brief 只恢复 Kp/Ki/Kd 宏初值；不改舵机、速度和失线参数。 */
 void TrackParams_RestorePID(TrackParams *params);
+/** @brief 只恢复速度环三项增益，不改速度目标和原转向参数。 */
+void TrackParams_RestoreSpeedPID(TrackParams *params);
 
 /**
  * @brief 修改舵机方向并交换左右限位标签，保持中值和实际脉宽范围不变。
@@ -164,11 +176,11 @@ uint8_t TrackBodyCenter_Commit(TrackSensors *sensors);
 void TrackControl_Reset(TrackControl *control, const TrackParams *params);
 
 /**
- * @brief 计算一帧循迹；依次执行失线检查、误差补偿、十字、PID 和动力计算。
+ * @brief 计算一帧转向与失线保持；正常公共动力由独立速度环和应用层生成。
  * @param control 跨周期复用的状态和输出。
  * @param sensors 本帧测量及已提交的标定数据。
  * @param params  已校验范围的运行参数，函数内部仍会复核。
- * @param drive   1=允许计算电机动力，0=静态调 PID，仅计算舵机。
+ * @param drive   1=行驶，保留上一实际动力供失线限速；0=静态调 PID，清零电机。
  * @return 故障原因；弱信号确认期间返回 OK，但 signal_ok 为 0。
  * @note   drive=1 时确认期间保留受限输出；确认失线才返回 LOST 并清零电机。
  *         drive=0 时信号不足不输出电机，应用层关闭舵机预览。
