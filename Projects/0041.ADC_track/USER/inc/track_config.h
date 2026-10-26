@@ -70,9 +70,9 @@
 #define TRACK_SERVO_UNIT_US    2UL
 #define TRACK_SERVO_ABS_MIN    600    /* 绝对调试边界，还需服从实际机械限制。 */
 #define TRACK_SERVO_ABS_MAX    900
-#define TRACK_SERVO_DEFAULT_CENTER 760U
-#define TRACK_SERVO_DEFAULT_LEFT   840U /* 正向安装时的左限位，允许不对称行程。 */
-#define TRACK_SERVO_DEFAULT_RIGHT  670U /* 反向安装时由初始化函数交换左右标签。 */
+#define TRACK_SERVO_DEFAULT_CENTER 734U
+#define TRACK_SERVO_DEFAULT_LEFT   820U /* 正向安装时的左限位，允许不对称行程。 */
+#define TRACK_SERVO_DEFAULT_RIGHT  650U /* 反向安装时由初始化函数交换左右标签。 */
 /* 默认舵机方向；运行时可在“舵机设置”更改并保存，Flash 优先。 */
 #define TRACK_SERVO_LEFT_SIGN  1
 #define TRACK_ERROR_SIGN       1     /* 电感误差方向，仅允许 +1/-1。 */

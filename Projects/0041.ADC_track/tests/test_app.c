@@ -352,7 +352,7 @@ int main(void)
     menu_item=ROOT_CALIBRATION;handle_keys(KEY_OK_EVENT);assert(menu_count()==2);
     dump_screen("MDK/ui-cal-menu.bin");handle_keys(KEY_LEFT_EVENT);
     menu_item=ROOT_SERVO;handle_keys(KEY_OK_EVENT);assert(menu_item==3);handle_keys(KEY_LEFT_EVENT);
-    assert(params.center==760 && params.left==840 && params.right==670);
+    assert(params.center==734 && params.left==820 && params.right==650);
     enter(TRACK_BODY_CENTER);assert(mode==TRACK_BODY_CENTER && !hw_servo && !track_guard_armed);
     handle_keys(KEY_RIGHT_EVENT);step();
     assert(sensors.center_status==TRACK_BODY_IDLE && !sensors.center_valid);

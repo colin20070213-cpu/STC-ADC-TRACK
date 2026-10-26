@@ -67,9 +67,9 @@ int main(void)
     assert(TRACK_STORE_SLOT_A == 0 && TRACK_STORE_SLOT_B == 0x200);
     memset(memory, 0xff, sizeof(memory));
     assert(!TrackStore_Load(&params));
-    assert(params.center == 760 && params.left == 840 && params.right == 670);
+    assert(params.center == 734 && params.left == 820 && params.right == 650);
     assert(TrackStore_Save(&params) && TrackStore_LastError() == TRACK_STORE_OK);
-    assert(TrackStore_Load(&loaded) && loaded.center == 760);
+    assert(TrackStore_Load(&loaded) && loaded.center == 734);
     assert(EA && !IAP_CONTR && !IAP_CMD && !IAP_TRIG);
     assert(IAP_ADDRE == 0xff && IAP_ADDRH == 0xff && IAP_ADDRL == 0xff);
     assert(nop_count == 4 * operations && watchdog_feeds == operations);

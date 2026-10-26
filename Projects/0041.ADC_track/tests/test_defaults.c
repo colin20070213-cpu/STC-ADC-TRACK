@@ -56,7 +56,7 @@ int main(void)
     memset(flash_memory, 0xFF, sizeof(flash_memory));
     assert(!TrackStore_Load(&params));
     assert(params.kp100 == 5275 && params.ki100 == 5 && params.kd100 == 32);
-    assert(params.center == 760 && params.left == 840 && params.right == 670);
+    assert(params.center == 734 && params.left == 820 && params.right == 650);
     memcpy(flash_memory, legacy_record, sizeof(legacy_record));
     assert(TrackStore_Load(&params));
     assert(params.kp100 == 6000 && params.ki100 == 25 && params.kd100 == 30);

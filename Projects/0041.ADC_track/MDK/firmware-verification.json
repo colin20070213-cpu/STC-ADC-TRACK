@@ -1,6 +1,6 @@
 {
   "hex": "MDK\\Objects\\Project_Template.hex",
-  "sha256": "4ca3881dc147c2dcf282e3de8f30f8fe5c8d2b3cf1d45ed13e792c8e56eef597",
+  "sha256": "47c0e2553f767b6e2361403829b65f1fd3c70d043cd650300a62eb19e073b21e",
   "flash_data_bytes": 47689,
   "first_address": "FF0000",
   "last_address": "FFBA48",
