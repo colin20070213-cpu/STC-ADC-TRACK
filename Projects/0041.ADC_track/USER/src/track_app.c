@@ -119,7 +119,6 @@ static uint8_t speed_item;       /**< 0=基础动力，1=弯道最低动力。 *
 static uint8_t editing;
 static uint8_t coarse_step;
 static uint8_t defaults_loaded;
-static uint8_t uart_snapshot_pending;
 static uint8_t display_busy;
 static uint8_t display_off;      /**< 运行中熄屏；停车后完整更新画面再亮屏。 */
 static uint8_t cal_adc_error;
@@ -131,7 +130,7 @@ static uint16_t sample_values[TRACK_SENSOR_MAX];
 static uint16_t display_cursor;
 static uint8_t framebuffer[1024]; /**< OLED 128×64，8 个竖向页。 */
 static char text_line[48];
-static char telemetry[384];
+static char telemetry[64];
 static char message[22];          /**< 6×8 字体一行最多显示 21 个 ASCII 字符。 */
 static uint32_t last_control;
 static uint32_t last_display;
@@ -655,7 +654,6 @@ static void open_menu_page(MenuPage page)
     fault = TRACK_OK;
     editing = 0;
     message[0] = 0;
-    uart_snapshot_pending = 1;
     request_display();
 }
 
@@ -672,7 +670,6 @@ static void return_menu(TrackFault reason)
     control.right_motor = 0;
     editing = 0;
     message[0] = 0;
-    uart_snapshot_pending = 1;
     request_display();
 }
 
@@ -703,7 +700,6 @@ static uint8_t save_params(void)
     defaults_loaded = 0;
     TrackHW_SetMotorDirections(params.left_reverse, params.right_reverse);
     set_message("SAVED OK");
-    uart_snapshot_pending = 1;
     return 1;
 }
 
@@ -830,7 +826,6 @@ static void enter_menu_item(void)
             fault = TRACK_BAD_PARAMS;
             break;
     }
-    uart_snapshot_pending = 1;
     request_display();
 }
 
@@ -1108,7 +1103,6 @@ static void handle_body_keys(uint8_t keys)
             {
                 reset_pid();
                 set_message("CENTER SAVED (RAM)");
-                uart_snapshot_pending = 1;
             }
         }
         else if (sensors.center_status != TRACK_BODY_CAPTURING)
@@ -1425,73 +1419,22 @@ static void control_task(void)
     }
 }
 
-/** @brief 输出参数快照和 2Hz 转向/速度遥测；控制为 2ms，串口拥塞时丢帧。 */
+/** @brief 只发送两组 PID 的目标和反馈四列；115200/8N1，每 500ms 一帧。
+ *  @note 顺序：转向目标×1000、转向反馈×1000、速度目标×100、速度反馈×100。
+ *        不发送表头、参数快照或其他诊断列；队列满时丢帧，不阻塞控制。
+ */
 static void telemetry_task(uint32_t now)
 {
-    uint16_t dropped_frames;
-    uint16_t adc_frames;
-    uint16_t adc_overruns;
-    uint16_t length;
-    uint8_t previous_irq;
-
-    if (uart_snapshot_pending)
-    {
-        length = sprintf(telemetry,
-                "#CFG,mode=%u,kp100=%u,ki100=%u,kd100=%u,center=%u,left=%u,right=%u,"
-                "cal=%u,bodyRef=%d,bodyCal=%u,base=%u,curve=%u,"
-                "servoDir=%d,leftRev=%u,rightRev=%u,menu=%u",
-                (unsigned int)mode, params.kp100, params.ki100, params.kd100,
-                params.center, params.left, params.right, (unsigned int)sensors.valid,
-                sensors.center_bias, (unsigned int)sensors.center_valid,
-                params.base_duty, params.curve_duty, params.servo_left_sign,
-                (unsigned int)params.left_reverse, (unsigned int)params.right_reverse,
-                (unsigned int)menu_page);
-        sprintf(telemetry + length, ",speedBase=%u,speedCurve=%u,speedKp=%u,speedKi=%u,speedKd=%u\r\n",
-                params.speed_base, params.speed_curve, params.speed_kp100, params.speed_ki100, params.speed_kd100);
-        if (TrackUART_Queue(telemetry))
-        {
-            uart_snapshot_pending = 0;
-        }
-    }
     if ((mode != TRACK_PID && mode != TRACK_SPEED_PID && mode != TRACK_RUN) ||
         (uint32_t)(now - last_telemetry) < TRACK_TELEMETRY_MS)
     {
         return;
     }
     last_telemetry = now;
-    previous_irq = EA;
-    EA = 0;
-    dropped_frames = track_tx_dropped;
-    adc_frames = track_adc_frames;
-    adc_overruns = track_adc_overruns;
-    EA = previous_irq;
-
-    length = sprintf(telemetry, "%lu,%u,%u,%u,%u,%u,", (unsigned long)now,
-                     (unsigned int)mode, sensors.raw[0], sensors.raw[1],
-                     sensors.raw[2], sensors.raw[3]);
-    length += sprintf(telemetry + length, "%u,%u,%u,%u,%d,%u,%u,%u,",
-                      sensors.norm[0], sensors.norm[1], sensors.norm[2], sensors.norm[3],
-                      control.error, params.kp100, params.ki100, params.kd100);
-    length += sprintf(telemetry + length, "%d,%d,%d,%d,%u,%u,%u,%u,",
-                      control.p_x10, control.i_x10, control.d_x10, control.unclamped_x10,
-                      control.servo, params.center, params.left, params.right);
-    sprintf(telemetry + length, "%u,%u,%u,%u,%u,%u,%u,%d,%u,%d,%u,%u,%d,%u,%u,%d,%d,%u,%u\r\n",
-            control.left_motor, control.right_motor, (unsigned int)control.signal_ok,
-            (unsigned int)fault, (unsigned int)control.saturated, dropped_frames,
-            (unsigned int)sensors.valid, sensors.center_bias,
-            (unsigned int)sensors.center_valid, TrackSensors_Error(&sensors),
-            params.base_duty, params.curve_duty, params.servo_left_sign,
-            (unsigned int)params.left_reverse, (unsigned int)params.right_reverse,
+    sprintf(telemetry, "%d,%d,%ld,%ld\r\n",
             (int)TRACK_STEERING_TARGET1000, TrackSensors_Feedback(&sensors),
-            adc_frames, adc_overruns);
-    length = (uint16_t)strlen(telemetry);
-    /* 保留原 41 列顺序，覆盖原 CRLF 后追加速度闭环 11 列。 */
-    sprintf(telemetry + length - 2, ",%ld,%ld,%ld,%u,%u,%u,%ld,%ld,%ld,%u,%u\r\n",
-            (long)(speed_control.target * 100.0f), (long)(speed_control.feedback * 100.0f),
-            (long)(speed_control.raw_feedback * 100.0f), params.speed_kp100, params.speed_ki100,
-            params.speed_kd100, (long)(speed_control.p_term * 10.0f),
-            (long)(speed_control.integral * 10.0f), (long)(speed_control.d_term * 10.0f),
-            speed_control.output, (unsigned int)encoder_direction);
+            (long)(speed_control.target * 100.0f),
+            (long)(speed_control.feedback * 100.0f));
     TrackUART_Queue(telemetry);
 }
 
@@ -1530,12 +1473,6 @@ void TrackApp_Init(void)
     speed_control.measured = 0;
     last_display = last_control - TRACK_DISPLAY_PERIOD_MS;
     last_telemetry = last_control;
-    TrackUART_Queue(
-        "#ms,mode,rawL,rawR,raw3,raw4,nL,nR,n3,n4,e1000,kp100,ki100,kd100,"
-        "P10,I10,D10,U10,servo,center,left,right,pwmL,pwmR,signal,fault,sat,drop,cal,"
-        "bodyRef,bodyCal,measuredE,base,curve,servoDir,leftRev,rightRev,"
-        "target1000,feedback1000,adcFrames,adcOverruns,speedTarget100,speedFeedback100,speedRaw100,speedKp100,speedKi100,speedKd100,speedP10,speedI10,speedD10,speedPWM,encDir\r\n");
-    uart_snapshot_pending = 1;
     /* 33.1776MHz 下约 1.5s，看门狗只在前台主循环中喂。 */
     WDT_CONTR = 0x26;
 }

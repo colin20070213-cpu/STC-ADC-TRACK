@@ -126,69 +126,52 @@ static void dump_screen(const char *path)
     assert(fwrite(framebuffer,1,1024,f)==1024);fclose(f);
 }
 
-/** @brief 解析真实 CSV，核对字段顺序、反馈符号与低波特率发送预算。 */
+/** @brief 检查真实四列 CSV 的顺序、标度、反馈来源、发送模式和周期。 */
 static void telemetry_tests(void)
 {
-    char copy[512];
-    char *token;
-    long fields[52];
-    unsigned count, before;
-    uint32_t now = 10000;
+    unsigned before;
+    uint32_t now=10000;
+    TrackMode test_mode;
 
-    mode=TRACK_PID;
-    uart_snapshot_pending=0;
+    mode=TRACK_RUN;
     last_telemetry=now;
     before=uart_calls;
     telemetry_task(now+TRACK_TELEMETRY_MS-1);
     assert(uart_calls==before);
     sensors.valid=1;sensors.center_valid=1;sensors.center_bias=150;
     sensors.norm[0]=600;sensors.norm[1]=400;sensors.norm[2]=sensors.norm[3]=0;
-    track_adc_frames=1234;track_adc_overruns=2;
+    speed_control.target=20.0f;speed_control.feedback=18.5f;
+    speed_control.raw_feedback=25.0f; /* 必须发送滤波后的反馈，不是这一路原始值。 */
     control.error=50;
     telemetry_task(now+=TRACK_TELEMETRY_MS);
     assert(uart_calls==before+1 && TRACK_TELEMETRY_MS==500);
-    strcpy(copy,uart_line);count=0;
-    for(token=strtok(copy,",");token;token=strtok(NULL,","))
-    {
-        assert(count<52);fields[count++]=strtol(token,NULL,10);
-    }
-    assert(count==52 && fields[10]==50 && fields[37]==0 && fields[38]==50 && fields[39]==1234 && fields[40]==2);
-    sensors.norm[0]=400;sensors.norm[1]=600;
-    control.error=-350;
+    assert(!strcmp(uart_line,"0,50,2000,1850\r\n"));
+    sensors.norm[0]=400;sensors.norm[1]=600;control.error=-350;
     telemetry_task(now+=TRACK_TELEMETRY_MS);
-    assert(strstr(uart_line,",0,-350,1234,2,"));
+    assert(!strcmp(uart_line,"0,-350,2000,1850\r\n"));
 
-    /* 十字策略可以把控制误差置零，反馈仍必须保留本帧电感测量。 */
+    /* 十字策略可置零控制误差，发送的实际位置仍来自电感反馈。 */
     control.error=0;control.crossing=1;
     sensors.norm[0]=1000;sensors.norm[1]=900;
     telemetry_task(now+=TRACK_TELEMETRY_MS);
-    assert(strstr(uart_line,",0,-98,1234,2,"));
+    assert(!strcmp(uart_line,"0,-98,2000,1850\r\n"));
+    speed_control.target=1000.0f;speed_control.feedback=2000.0f;
+    telemetry_task(now+=TRACK_TELEMETRY_MS);
+    assert(!strcmp(uart_line,"0,-98,100000,200000\r\n"));
+    assert(strlen(uart_line)<sizeof(telemetry));
+    assert(strlen(uart_line)*10000UL<=TRACK_UART_BAUD*TRACK_TELEMETRY_MS*4UL/5UL);
 
-    /* 以各字段允许的最大打印宽度检查 8N1 的持续数据量，保留至少 20% 余量。 */
-    params.kp100=TRACK_PID_KP_MAX_X100;params.ki100=params.kd100=2000;
-    params.center=params.left=params.right=900;
-    params.base_duty=params.curve_duty=4000;params.servo_left_sign=-1;
-    params.left_reverse=params.right_reverse=1;
-    for(count=0;count<4;++count){sensors.raw[count]=4095;sensors.norm[count]=1000;}
-    sensors.norm[0]=0;sensors.center_bias=300;
-    control.p_x10=control.i_x10=control.d_x10=control.unclamped_x10=-32768;
-    control.servo=900;control.error=-1000;
-    control.left_motor=control.right_motor=4000;
-    control.signal_ok=control.saturated=1;track_tx_dropped=track_adc_frames=track_adc_overruns=65535;fault=TRACK_NO_CENTER;
-    params.speed_kp100=params.speed_ki100=params.speed_kd100=50000;
-    speed_control.target=1000;speed_control.feedback=speed_control.raw_feedback=2000;
-    speed_control.p_term=-500000;speed_control.integral=4000;speed_control.d_term=-25000000;
-    speed_control.output=4000;encoder_direction=1;
-    telemetry_task(0xffffffffUL);
-    assert(strlen(uart_line)*10000UL <= TRACK_UART_BAUD*TRACK_TELEMETRY_MS*4UL/5UL);
-    printf("PASS: 52-column telemetry, explicit target/feedback and configured UART budget (%u bytes/frame)\n",(unsigned)strlen(uart_line));
-
-    mode=TRACK_SPEED_PID;uart_snapshot_pending=0;before=uart_calls;
-    telemetry_task(last_telemetry+TRACK_TELEMETRY_MS);
-    assert(uart_calls==before+1);
-    mode=TRACK_MENU;uart_snapshot_pending=0;before=uart_calls;
-    telemetry_task(0xffffffffUL);
+    for(test_mode=TRACK_MENU;test_mode<=TRACK_SPEED_PID;test_mode++)
+    {
+        mode=test_mode;before=uart_calls;
+        telemetry_task(now+=TRACK_TELEMETRY_MS);
+        assert(uart_calls-before==(unsigned)(mode==TRACK_PID || mode==TRACK_SPEED_PID || mode==TRACK_RUN));
+    }
+    before=uart_calls;TrackApp_Init();
+    assert(uart_calls==before); /* 上电无表头及 #CFG。 */
+    telemetry_task(TrackHW_Now()+TRACK_TELEMETRY_MS);
     assert(uart_calls==before);
+    puts("PASS: exactly four PID target/feedback columns, scales/signs, filtered speed, true position through crossing, allowed modes/period and silent startup/menu");
 }
 
 /** @brief 验证居中页实际字模包含中间误差值和原始 ADC，防止只测计算不测显示。 */
@@ -259,7 +242,7 @@ int main(void)
     unsigned n, old_store_calls;uint16_t old;TrackParams before_restore, before_direction;
     TrackApp_Init();assert(mode==TRACK_MENU && !sensors.valid);
     assert(sensor_math_ok);
-    assert(strstr(uart_line,",target1000,feedback1000,adcFrames,adcOverruns,"));
+    assert(uart_calls==0);
     dump_screen("MDK/ui-menu-1.bin");menu_item=ROOT_RUN;dump_screen("MDK/ui-menu-2.bin");
     handle_keys(KEY_DOWN_EVENT);assert(menu_item==0);
     handle_keys(KEY_UP_EVENT);assert(menu_item==ROOT_RUN);
