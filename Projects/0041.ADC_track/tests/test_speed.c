@@ -16,13 +16,14 @@ int main(void)
     TrackFault result;
 
     memset(&state,0,sizeof(state));TrackParams_Default(&params);
-    params.speed_base=20;params.speed_curve=10;
+    params.base_speed_pps=2500;params.curve_speed_pps=1400;
+    params.legacy_speed_base=1000;params.legacy_speed_curve=700; /* 旧额外目标不参与控制。 */
     /* 固定仿真增益，不让用户实车调参宏改变被测电机模型的验收条件。 */
     params.speed_kp100=3000;params.speed_ki100=3000;params.speed_kd100=0;
-    assert(TrackSpeed_Target(&params,500,0)==15);
-    assert(TrackSpeed_Target(&params,-500,0)==15);
-    assert(TrackSpeed_Target(&params,0,1)==10);
-    assert(TrackSpeed_Limit(&params,1000,0)==params.curve_duty);
+    assert(TrackSpeed_Target(&params,500,0)==1950);
+    assert(TrackSpeed_Target(&params,-500,0)==1950);
+    assert(TrackSpeed_Target(&params,0,1)==1400);
+    assert(TrackSpeed_Target(&params,0,0)==2500);
     assert(!TrackSpeed_Measure(&state,1,0));
     assert(!TrackSpeed_Measure(&state,5000,10));
     assert(period==2);
@@ -36,7 +37,7 @@ int main(void)
         actual+=(float)period/(125.0f+period)*(state.output/gain-actual);
         phase+=actual*period/10.0f;pulses=(uint16_t)phase;phase-=pulses;
         assert(TrackSpeed_Measure(&state,pulses,period));
-        assert(TrackSpeed_Calculate(&state,&params,20,3000,period)==TRACK_OK);
+        assert(TrackSpeed_Calculate(&state,&params,2000,3000,period)==TRACK_OK);
         assert(state.output<=3000);
     }
     printf("plant=%.4f feedback=%.4f pwm=%u first=%u integral=%.4f\n",actual,state.feedback,state.output,first_output,state.integral);fflush(stdout);
@@ -46,10 +47,17 @@ int main(void)
 
     memset(&state,0,sizeof(state));params.speed_kp100=100000UL;params.speed_ki100=params.speed_kd100=0;
     assert(TrackSpeed_Measure(&state,0,period));state.target=1.0f;state.output=2000;
-    assert(TrackSpeed_Calculate(&state,&params,20,3000,period)==TRACK_OK);
-    assert(fabsf(state.p_term-1050.0f)<0.1f && state.output>=1049 && state.output<=1051);
+    assert(TrackSpeed_Calculate(&state,&params,100,3000,period)==TRACK_OK);
+    assert(fabsf(state.p_term-1000.0f)<0.1f && state.output==1000);
+    /* 第一次 2ms 就能输出完整 PID 动力，不再额外爬升几百毫秒。 */
+    TrackSpeed_Stop(&state);
+    assert(TrackSpeed_Calculate(&state,&params,2500,TRACK_DUTY_MAX,period)==TRACK_OK);
+    assert(state.target==25.0f && state.output==TRACK_DUTY_MAX);
+    state.feedback=100.0f;
+    assert(TrackSpeed_Calculate(&state,&params,2500,TRACK_DUTY_MAX,period)==TRACK_OK && !state.output);
+    assert(TrackSpeed_Calculate(&state,&params,0,TRACK_DUTY_MAX,period)==TRACK_OK && !state.output);
 
-    params.speed_base=1000;params.speed_curve=0;params.speed_kp100=50000;params.speed_ki100=50000;
+    params.base_speed_pps=1000;params.curve_speed_pps=0;params.speed_kp100=50000;params.speed_ki100=50000;
     memset(&state,0,sizeof(state));
     for(n=0;n<500;n++)
     {

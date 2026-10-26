@@ -70,14 +70,14 @@ typedef struct
     uint16_t center;     /**< 舵机机械中值，1 单位=2us 脉宽，与载波频率解耦。 */
     uint16_t left;       /**< 舵机物理左限位，与运行时方向配合使用。 */
     uint16_t right;      /**< 舵机物理右限位。 */
-    uint16_t base_duty;  /**< 基础动力 PWM；1000 对应 10.00%。 */
-    uint16_t curve_duty; /**< 弯道最低动力，不得大于 base_duty。 */
+    uint16_t base_speed_pps;  /**< 唯一基础速度目标，脉冲/秒；沿用旧记录 offset20 的数值。 */
+    uint16_t curve_speed_pps; /**< 弯道速度目标，脉冲/秒，不得大于 BASE。 */
     uint16_t lost_sum;   /**< 左右有效强度之和的失线阈值（每侧取横/纵较强值）。 */
     int16_t servo_left_sign; /**< +1=占空比增大向左，-1=占空比减小向左。 */
     uint8_t left_reverse;    /**< 逻辑左电机反向开关，0=正向，1=反向。 */
     uint8_t right_reverse;   /**< 逻辑右电机反向开关，0=正向，1=反向。 */
-    uint16_t speed_base;     /**< 基础目标，P04 计数/10ms；0 表示未设置。 */
-    uint16_t speed_curve;    /**< 大偏差时的目标速度，不大于 speed_base。 */
+    uint16_t legacy_speed_base;     /**< 旧独立速度目标，仅保留存储兼容，不参与控制。 */
+    uint16_t legacy_speed_curve;    /**< 旧独立弯道目标，仅用于兼容。 */
     uint32_t speed_kp100;    /**< 独立速度环 Kp ×100。 */
     uint32_t speed_ki100;    /**< 独立速度环 Ki ×100。 */
     uint32_t speed_kd100;    /**< 独立速度环 Kd ×100，默认 0。 */

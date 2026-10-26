@@ -1,5 +1,5 @@
 /** @file track_speed.c
- *  @brief 单编码器速度闭环：测量滤波、目标斜率、微分滤波、抗饱和、堵转保护。
+ *  @brief 单编码器速度闭环：测量滤波、即时目标、微分滤波、抗饱和、堵转保护。
  */
 #include "track_speed.h"
 
@@ -52,9 +52,8 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
     float candidate_integral;
     float unconstrained;
     float output;
-    float rising_limit;
 
-    if (!TrackParams_Valid(params) || requested > TRACK_SPEED_TARGET_MAX || pwm_limit > TRACK_DUTY_MAX)
+    if (!TrackParams_Valid(params) || requested > TRACK_SPEED_COMMAND_MAX_PPS || pwm_limit > TRACK_DUTY_MAX)
     {
         TrackSpeed_Stop(state);
         return TRACK_BAD_PARAMS;
@@ -70,8 +69,7 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
         return TRACK_OK;
     }
     dt = elapsed_ms / 1000.0f;
-    state->target += TRACK_SPEED_RAMP_PER_SECOND * dt;
-    if (state->target > requested) state->target = requested;
+    state->target = requested / 100.0f; /* 脉冲/秒 → 内部计数/10ms；不叠加慢爬升。 */
     error = state->target - state->feedback;
     if (!state->initialized)
     {
@@ -88,10 +86,8 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
     candidate_integral = speed_clamp(state->integral + params->speed_ki100 * 0.01f * error * dt,
                                      0, (float)pwm_limit);
     unconstrained = state->p_term + candidate_integral + state->d_term;
-    rising_limit = state->output + (float)TRACK_SPEED_PWM_RISE_PER_MS * elapsed_ms;
-    if (rising_limit > pwm_limit) rising_limit = pwm_limit;
-    output = speed_clamp(unconstrained, 0, rising_limit);
-    /* 输出上限、加速上限均参与抗积分饱和；减速不受加速斜率限制。 */
+    output = speed_clamp(unconstrained, 0, (float)pwm_limit);
+    /* 只保留 PWM 绝对限幅与抗积分饱和，输出不受额外加速斜率限制。 */
     if (output == unconstrained || (unconstrained > output && error < 0) ||
         (unconstrained < output && error > 0))
     {
@@ -99,7 +95,7 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
     }
     else
     {
-        output = speed_clamp(state->p_term + state->integral + state->d_term, 0, rising_limit);
+        output = speed_clamp(state->p_term + state->integral + state->d_term, 0, (float)pwm_limit);
     }
     state->saturated = output != unconstrained;
     state->output = (uint16_t)output;
@@ -128,10 +124,5 @@ static uint16_t speed_interpolate(uint16_t straight, uint16_t curve, int16_t err
 
 uint16_t TrackSpeed_Target(const TrackParams *params, int16_t error, uint8_t crossing)
 {
-    return speed_interpolate(params->speed_base, params->speed_curve, error, crossing);
-}
-
-uint16_t TrackSpeed_Limit(const TrackParams *params, int16_t error, uint8_t crossing)
-{
-    return speed_interpolate(params->base_duty, params->curve_duty, error, crossing);
+    return speed_interpolate(params->base_speed_pps, params->curve_speed_pps, error, crossing);
 }

@@ -121,8 +121,8 @@ static void encode_store_record(uint8_t *record, const TrackParams *params, uint
     memset(record + 32, 0xff, STORE_TOTAL_BYTES - 32);
     memcpy(record + 32, "SPD2", 4);
     memcpy(record + 36, record + 4, 4);
-    store_u16(record + 40, params->speed_base);
-    store_u16(record + 42, params->speed_curve);
+    store_u16(record + 40, params->legacy_speed_base);
+    store_u16(record + 42, params->legacy_speed_curve);
     store_u32(record + 44, params->speed_kp100);
     store_u32(record + 48, params->speed_ki100);
     store_u32(record + 52, params->speed_kd100);
@@ -130,6 +130,7 @@ static void encode_store_record(uint8_t *record, const TrackParams *params, uint
     store_u16(record + 58, params->c4_a);
     store_u16(record + 60, params->c4_b);
     store_u16(record + 62, params->c4_c);
+    memcpy(record + 64, "PPS1", 4); /* offset20/22 已统一为脉冲/秒目标，保留原数值。 */
     store_u16(record + 76, TrackCRC16(record + 32, 44));
     record[79] = 0x5a;
 }
@@ -142,8 +143,8 @@ static uint8_t decode_spd1(const uint8_t *record, TrackParams *candidate)
 
     if (memcmp(record + 36, record + 4, 4) || memcmp(record + 50, record + 28, 2) ||
         record[63] != 0x5a || load_u16(record + 60) != TrackCRC16(record + 32, 28)) return 0;
-    candidate->speed_base = load_u16(record + 40);
-    candidate->speed_curve = load_u16(record + 42);
+    candidate->legacy_speed_base = load_u16(record + 40);
+    candidate->legacy_speed_curve = load_u16(record + 42);
     candidate->speed_kp100 = load_u16(record + 44);
     candidate->speed_ki100 = load_u16(record + 46);
     candidate->speed_kd100 = load_u16(record + 48);
@@ -184,8 +185,16 @@ static uint8_t decode_store_record(const uint8_t *record, TrackParams *params, u
         {
             if (memcmp(record + 36, record + 4, 4) || memcmp(record + 56, record + 28, 2) ||
                 record[79] != 0x5a || load_u16(record + 76) != TrackCRC16(record + 32, 44)) return 0;
-            candidate.speed_base = load_u16(record + 40);
-            candidate.speed_curve = load_u16(record + 42);
+            if (memcmp(record + 64, "PPS1", 4))
+            {
+                /* 无标记的旧 SPD2 保留原 BASE/CURVE 数字；未知单位标记不能误读。 */
+                for (index = 64; index < 76; ++index)
+                {
+                    if (record[index] != 0xff) return 0;
+                }
+            }
+            candidate.legacy_speed_base = load_u16(record + 40);
+            candidate.legacy_speed_curve = load_u16(record + 42);
             candidate.speed_kp100 = load_u32(record + 44);
             candidate.speed_ki100 = load_u32(record + 48);
             candidate.speed_kd100 = load_u32(record + 52);

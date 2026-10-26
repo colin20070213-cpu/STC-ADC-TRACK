@@ -55,15 +55,15 @@ void TrackParams_Default(TrackParams *params)
     TrackParams_RestorePID(params);
     TrackParams_RestoreSpeedPID(params);
     TrackParams_RestoreC4(params);
-    params->speed_base = TRACK_SPEED_BASE_DEFAULT;
-    params->speed_curve = TRACK_SPEED_CURVE_DEFAULT;
+    params->legacy_speed_base = TRACK_LEGACY_SPEED_BASE_DEFAULT;
+    params->legacy_speed_curve = TRACK_LEGACY_SPEED_CURVE_DEFAULT;
     params->center = TRACK_SERVO_DEFAULT_CENTER;
     params->left = TRACK_SERVO_LEFT_SIGN == 1 ?
                    TRACK_SERVO_DEFAULT_LEFT : TRACK_SERVO_DEFAULT_RIGHT;
     params->right = TRACK_SERVO_LEFT_SIGN == 1 ?
                     TRACK_SERVO_DEFAULT_RIGHT : TRACK_SERVO_DEFAULT_LEFT;
-    params->base_duty = TRACK_BASE_DUTY;
-    params->curve_duty = TRACK_CURVE_MIN_DUTY;
+    params->base_speed_pps = TRACK_BASE_SPEED_PPS;
+    params->curve_speed_pps = TRACK_CURVE_SPEED_PPS;
     params->lost_sum = TRACK_LOST_SUM;
     params->servo_left_sign = TRACK_SERVO_LEFT_SIGN;
     params->left_reverse = TRACK_LEFT_REVERSE;
@@ -73,7 +73,7 @@ void TrackParams_Default(TrackParams *params)
 uint8_t TrackParams_Valid(const TrackParams *params)
 {
     if (!c4_weights_valid(params)) return 0;
-    if (params->speed_base > TRACK_SPEED_TARGET_MAX || params->speed_curve > params->speed_base ||
+    if (params->legacy_speed_base > TRACK_LEGACY_SPEED_TARGET_MAX || params->legacy_speed_curve > params->legacy_speed_base ||
         params->speed_kp100 > TRACK_SPEED_GAIN_MAX_X100 ||
         params->speed_ki100 > TRACK_SPEED_GAIN_MAX_X100 || params->speed_kd100 > TRACK_SPEED_GAIN_MAX_X100)
     {
@@ -102,7 +102,7 @@ uint8_t TrackParams_Valid(const TrackParams *params)
     {
         return 0;
     }
-    if (params->base_duty > TRACK_DUTY_MAX || params->curve_duty > params->base_duty)
+    if (params->base_speed_pps > TRACK_SPEED_COMMAND_MAX_PPS || params->curve_speed_pps > params->base_speed_pps)
     {
         return 0;
     }
@@ -671,10 +671,10 @@ static void enforce_motor_interlock(TrackControl *control, uint8_t drive)
 }
 
 /** @brief 连续弱信号计时及限速保持；不依据弱信号重新计算舵机位置。 */
-static TrackFault hold_weak_signal(TrackControl *control, const TrackParams *params,
+static TrackFault hold_weak_signal(TrackControl *control,
                                   uint16_t left, uint16_t right, uint8_t drive)
 {
-    uint16_t limit = params->curve_duty;
+    uint16_t limit = TRACK_LOST_DUTY_MAX;
 
     control->signal_ok = 0;
     if (control->weak_ms == 0)
@@ -759,7 +759,7 @@ TrackFault TrackControl_Step(TrackControl *control, const TrackSensors *sensors,
     }
     if (signal_sum < required_sum || !TrackSensors_SteeringValid(sensors, params))
     {
-        return hold_weak_signal(control, params, left_signal, right_signal, drive);
+        return hold_weak_signal(control, left_signal, right_signal, drive);
     }
     control->signal_ok = 1;
     control->weak_ms = 0;
@@ -839,8 +839,8 @@ void TrackRecord_Encode(uint8_t *record, const TrackParams *params, uint32_t seq
     write_u16(record + 14, params->center);
     write_u16(record + 16, params->left);
     write_u16(record + 18, params->right);
-    write_u16(record + 20, params->base_duty);
-    write_u16(record + 22, params->curve_duty);
+    write_u16(record + 20, params->base_speed_pps);
+    write_u16(record + 22, params->curve_speed_pps);
     write_u16(record + 24, params->lost_sum);
     record[26] = (params->servo_left_sign < 0 ? 1 : 0) |
                  (params->left_reverse ? 2 : 0) | (params->right_reverse ? 4 : 0);
@@ -858,15 +858,15 @@ uint8_t TrackRecord_Decode(const uint8_t *record, TrackParams *params, uint32_t 
     {
         return 0;
     }
-    TrackParams_Default(&candidate); /* 旧记录的新速度字段使用代码初值，不把旧 PWM 当速度。 */
+    TrackParams_Default(&candidate); /* 旧独立目标仅兼容；offset20/22 数字保留为唯一的 pps 目标。 */
     candidate.kp100 = read_u16(record + 8);
     candidate.ki100 = read_u16(record + 10);
     candidate.kd100 = read_u16(record + 12);
     candidate.center = read_u16(record + 14);
     candidate.left = read_u16(record + 16);
     candidate.right = read_u16(record + 18);
-    candidate.base_duty = read_u16(record + 20);
-    candidate.curve_duty = read_u16(record + 22);
+    candidate.base_speed_pps = read_u16(record + 20);
+    candidate.curve_speed_pps = read_u16(record + 22);
     candidate.lost_sum = read_u16(record + 24);
     if (record[3] == 2)
     {

@@ -8,13 +8,13 @@
 
 /* PID 初值直接填写实际值；例如 40.00f 表示 Kp=40.00。 */
 #ifndef TRACK_PID_DEFAULT_KP
-#define TRACK_PID_DEFAULT_KP    130.00f
+#define TRACK_PID_DEFAULT_KP    125.00f
 #endif
 #ifndef TRACK_PID_DEFAULT_KI
 #define TRACK_PID_DEFAULT_KI     0.00f
 #endif
 #ifndef TRACK_PID_DEFAULT_KD
-#define TRACK_PID_DEFAULT_KD     8.15f
+#define TRACK_PID_DEFAULT_KD     6.75f
 #endif
 #define TRACK_PID_KP_MAX_X100   50000U /* Kp 上限 500.00；代码初值与现场保存值可分别调整。 */
 #define TRACK_PID_KI_MAX_X100    2000U
@@ -76,30 +76,30 @@
 /* 默认舵机方向；运行时可在“舵机设置”更改并保存，Flash 优先。 */
 #define TRACK_SERVO_LEFT_SIGN  1
 #define TRACK_ERROR_SIGN       1     /* 电感误差方向，仅允许 +1/-1。 */
-/* 电机：这些值是动力 PWM，不是 cm/s。Flash 可覆盖默认基础/弯道动力。 */
+/* 电机：BASE/CURVE 为唯一速度目标；TRACK_DUTY_MAX 独立限制实际 PWM。 */
 #define TRACK_MOTOR_FREQUENCY  10000UL /* 电机 PWM 频率，单位 Hz。 */
 #define TRACK_MOTOR_SWAP       0      /* 两组电机对调：0=否，1=是。 */
 #define TRACK_LEFT_REVERSE     0      /* 默认逻辑左电机方向，菜单可覆盖并保存。 */
 #define TRACK_RIGHT_REVERSE    0      /* 默认逻辑右电机方向，菜单可覆盖并保存。 */
-#define TRACK_BASE_DUTY        3000   /* 速度闭环直线动力上限，当前初值 30.00%。 */
-#define TRACK_CURVE_MIN_DUTY   1500   /* 速度闭环弯道动力上限，当前初值 15.00%。 */
-#define TRACK_DUTY_MAX         4000   /* 菜单校验和实际输出共同上限 40.00%。 */
-#define TRACK_SPEED_FINE_STEP  10U  /* 速度页精调：0.10% 占空比。 */
-#define TRACK_SPEED_COARSE_STEP 100U /* 速度页粗调：1.00% 占空比。 */
-#define TRACK_MOTOR_RAMP       (2U * TRACK_PERIOD_MS) /* 每毫秒 2 单位，2ms 每次增加 4。 */
+#define TRACK_BASE_SPEED_PPS   2500U /* 唯一 BASE 目标，单位脉冲/秒；沿用原动力参数的数字。 */
+#define TRACK_CURVE_SPEED_PPS  1400U /* 唯一 CURVE 目标，单位脉冲/秒。 */
+#define TRACK_DUTY_MAX         4000U /* 速度 PID 的统一 PWM 绝对上限，40%。 */
+#define TRACK_SPEED_COMMAND_MAX_PPS 4000U /* 菜单目标上限，单位脉冲/秒，与 PWM 单位独立。 */
+#define TRACK_SPEED_FINE_STEP  10U  /* 速度页精调：10 脉冲/秒。 */
+#define TRACK_SPEED_COARSE_STEP 100U /* 速度页粗调：100 脉冲/秒。 */
 #define TRACK_LEFT_TRIM        0     /* 左轮开环动力补偿，可正可负。 */
 #define TRACK_RIGHT_TRIM       0     /* 右轮开环动力补偿，可正可负。 */
-/* 右后轮单编码器速度环。速度单位为 P04 计数/10ms；未知每圈计数时不换算 m/s。
- * 默认目标为 0，需在“电机设置→速度设定”设置非零基础速度后发车。
- * 原 BASE/CURVE PWM 参数继续作为直线/弯道动力上限，不能当作速度值迁移。 */
+/* 唯一一组 BASE/CURVE 输入按脉冲/秒作为速度目标，PWM 由速度 PID 计算。
+ * 内部速度计算保留计数/10ms，输入除以 100、遥测乘以 100 即得到脉冲/秒。
+ * 不再叠加目标爬升或 PWM 增速限制；以下 LEGACY 字段仅兼容旧 EEPROM。 */
 #define TRACK_ENCODER_SAMPLE_MS     1U  /* TIM0 保存原始计数快照，不等待脉冲。 */
 #define TRACK_ENCODER_STALE_MS      2U  /* 前台拒绝超期的计数快照。 */
 #define TRACK_SPEED_PERIOD_MS       2U  /* 速度闭环每两个编码器快照更新。 */
-#define TRACK_SPEED_BASE_DEFAULT    0U
-#define TRACK_SPEED_CURVE_DEFAULT   0U
-#define TRACK_SPEED_TARGET_MAX      1000U
+#define TRACK_LEGACY_SPEED_BASE_DEFAULT    0U
+#define TRACK_LEGACY_SPEED_CURVE_DEFAULT   0U
+#define TRACK_LEGACY_SPEED_TARGET_MAX      1000U
 #ifndef TRACK_SPEED_DEFAULT_KP
-#define TRACK_SPEED_DEFAULT_KP      1000.00f
+#define TRACK_SPEED_DEFAULT_KP      500.00f
 #endif
 #ifndef TRACK_SPEED_DEFAULT_KI
 #define TRACK_SPEED_DEFAULT_KI      0.00f
@@ -110,8 +110,6 @@
 #define TRACK_SPEED_GAIN_MAX_X100    500000UL /* 三项速度增益最大 5000.00，32 位保存。 */
 #define TRACK_SPEED_FEEDBACK_TAU_MS  10.0f /* 轮速低通时间常数，抑制短窗口量化跳动。 */
 #define TRACK_SPEED_D_TAU_MS         30.0f /* 测量微分低通时间常数，与实际 dt 配合。 */
-#define TRACK_SPEED_RAMP_PER_SECOND  25.0f /* 每秒增加的目标计数/10ms。 */
-#define TRACK_SPEED_PWM_RISE_PER_MS  2U
 #define TRACK_SPEED_STALL_DUTY       1000U
 #define TRACK_SPEED_STALL_MS         1000U
 #define TRACK_ENCODER_MAX_PER_10MS   2000U /* 单边沿计数合理上界，防止异常读数。 */

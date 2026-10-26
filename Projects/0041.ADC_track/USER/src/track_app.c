@@ -87,8 +87,7 @@ static const MenuEntry pid_menu[] =
 };
 static const MenuEntry motor_menu[] =
 {
-    {LABEL_SPEED, TRACK_SPEED_TARGET},
-    {LABEL_PWM_LIMIT, TRACK_SPEED},
+    {LABEL_SPEED, TRACK_SPEED},
     {LABEL_LEFT_DIRECTION, TRACK_LEFT_DIRECTION},
     {LABEL_RIGHT_DIRECTION, TRACK_RIGHT_DIRECTION}
 };
@@ -200,7 +199,7 @@ static uint8_t menu_count(void)
     {
         case MENU_CALIBRATION: return 2;
         case MENU_SERVO:       return 4;
-        case MENU_MOTOR:       return 4;
+        case MENU_MOTOR:       return 3;
         case MENU_PID:         return TRACK_SENSOR_COUNT == 4 ? 3 : 2;
         default:               return ROOT_ITEM_COUNT;
     }
@@ -260,7 +259,7 @@ static uint8_t mode_label(void)
         case TRACK_LIMIT_LEFT:      return LABEL_SERVO_LEFT;
         case TRACK_LIMIT_RIGHT:     return LABEL_SERVO_RIGHT;
         case TRACK_BODY_CENTER:     return LABEL_BODY_CENTER;
-        case TRACK_SPEED:           return LABEL_PWM_LIMIT;
+        case TRACK_SPEED:           return LABEL_SPEED;
         case TRACK_SPEED_TARGET:    return LABEL_SPEED;
         case TRACK_SPEED_PID:       return LABEL_SPEED_PID;
         case TRACK_C4_TUNE:         return LABEL_C4_TUNE;
@@ -462,7 +461,7 @@ static void render_pid(void)
     }
     if (mode == TRACK_SPEED_PID)
     {
-        sprintf(text_line, "V:%u/10ms MOTOR OFF", (unsigned int)(speed_control.feedback+0.5f));
+        sprintf(text_line, "V:%lu/s MOTOR OFF", (unsigned long)(speed_control.feedback * 100.0f + 0.5f));
         text_at(0, 2, encoder_ok ? text_line : "ENC ERROR / MOTOR OFF");
     }
     else text_at(0, 2, sensors.valid ?
@@ -480,7 +479,7 @@ static void render_pid(void)
         text_at(0, (uint8_t)(item + 3), text_line);
     }
     if (mode == TRACK_SPEED_PID)
-        sprintf(text_line, "TARGET:%u PWM:%u%s", params.speed_base, speed_control.output, params_dirty() ? " *" : "");
+        sprintf(text_line, "TARGET:%u PWM:%u%s", params.base_speed_pps, speed_control.output, params_dirty() ? " *" : "");
     else sprintf(text_line, "E:%d S:%u%s%s", control.error, control.servo,
             control.saturated ? " LIM" : "", params_dirty() ? " *" : "");
     text_at(0, 6, text_line);
@@ -521,38 +520,23 @@ static void render_c4(void)
             (editing ? "OK:save <:undo >:step" : "^v:pick >:edit <:back")));
 }
 
-/** @brief 速度页的百分比来自 PWM，不表示实测轮速；编辑期间输出保持关闭。 */
+/** @brief 唯一速度目标页：沿用原 BASE/CURVE 数字，明确以脉冲/秒显示。 */
 static void render_speed(void)
 {
-    if (mode == TRACK_SPEED_TARGET)
-    {
-        sprintf(text_line, "%cBASE:%u", speed_item == 0 ? '>' : ' ', params.speed_base);
-        text_at(0, 2, text_line);
-        sprintf(text_line, "%cCURVE:%u", speed_item == 1 ? '>' : ' ', params.speed_curve);
-        text_at(0, 3, text_line);
-        sprintf(text_line, "NOW:%u pulse/10ms", (unsigned int)(speed_control.feedback+0.5f));
-        text_at(0, 4, text_line);
-        sprintf(text_line, "STEP:%u OFF%s", coarse_step ? 10 : 1, params_dirty() ? " *" : "");
-        text_at(0, 5, text_line);
-        sprintf(text_line, "ENC:%u DIR:%u", encoder_last_count, (unsigned int)encoder_direction);
-        text_at(0, 6, message[0] ? message : (encoder_ok ? text_line : "ENC ERROR"));
-        text_at(0, 7, editing ? "OK:save <:undo >:step" : "^v:pick >:edit <:back");
-        return;
-    }
-    sprintf(text_line, "%cBASE:%4u %2u.%02u%%", speed_item == 0 ? '>' : ' ',
-            params.base_duty, params.base_duty / 100, params.base_duty % 100);
+    sprintf(text_line, "PWM<=%u", (unsigned int)TRACK_DUTY_MAX);
+    text_at(70, 1, text_line);
+    sprintf(text_line, "%cBASE:%4u pps", speed_item == 0 ? '>' : ' ', params.base_speed_pps);
     text_at(0, 2, text_line);
-    sprintf(text_line, "%cCURVE:%4u %2u.%02u%%", speed_item == 1 ? '>' : ' ',
-            params.curve_duty, params.curve_duty / 100, params.curve_duty % 100);
+    sprintf(text_line, "%cCURVE:%4u pps", speed_item == 1 ? '>' : ' ', params.curve_speed_pps);
     text_at(0, 3, text_line);
-    sprintf(text_line, "LIMIT:%u = %u%%", (unsigned int)TRACK_DUTY_MAX,
-            (unsigned int)TRACK_DUTY_MAX / 100);
+    sprintf(text_line, "NOW:%lu pps", (unsigned long)(speed_control.feedback * 100.0f + 0.5f));
     text_at(0, 4, text_line);
-    sprintf(text_line, "STEP:%u%s", coarse_step ?
+    sprintf(text_line, "STEP:%u OFF%s", coarse_step ?
             (unsigned int)TRACK_SPEED_COARSE_STEP : (unsigned int)TRACK_SPEED_FINE_STEP,
             params_dirty() ? " *" : "");
     text_at(0, 5, text_line);
-    text_at(0, 6, message[0] ? message : "MOTOR/SERVO OFF");
+    sprintf(text_line, "ENC:%u DIR:%u", encoder_last_count, (unsigned int)encoder_direction);
+    text_at(0, 6, message[0] ? message : (encoder_ok ? text_line : "ENC ERROR"));
     text_at(0, 7, editing ? "OK:save <:undo >:step" : "^v:pick >:edit <:back");
 }
 
@@ -826,7 +810,7 @@ static void enter_menu_item(void)
                 fault = TRACK_BAD_PARAMS;
                 break;
             }
-            if (params.speed_base == 0)
+            if (params.base_speed_pps == 0)
             {
                 fault = TRACK_NO_SPEED;
                 break;
@@ -911,14 +895,9 @@ static void adjust_param(int8_t direction)
         selected_value = pid_item == 0 ? &candidate.kp100 :
                          pid_item == 1 ? &candidate.ki100 : &candidate.kd100;
     }
-    else if (mode == TRACK_SPEED_TARGET)
+    else if (mode == TRACK_SPEED || mode == TRACK_SPEED_TARGET)
     {
-        selected_value = speed_item == 0 ? &candidate.speed_base : &candidate.speed_curve;
-        step = coarse_step ? 10 : 1;
-    }
-    else if (mode == TRACK_SPEED)
-    {
-        selected_value = speed_item == 0 ? &candidate.base_duty : &candidate.curve_duty;
+        selected_value = speed_item == 0 ? &candidate.base_speed_pps : &candidate.curve_speed_pps;
         step = coarse_step ? TRACK_SPEED_COARSE_STEP : TRACK_SPEED_FINE_STEP;
     }
     else
@@ -1457,7 +1436,7 @@ static void control_task(void)
             }
             else
             {
-                uint16_t limit = TrackSpeed_Limit(&params, control.error, control.crossing);
+                uint16_t limit = TRACK_DUTY_MAX; /* BASE/CURVE 现在只表示目标速度，PWM 统一限幅。 */
                 if (encoder_fresh)
                 {
                     result = TrackSpeed_Calculate(&speed_control, &params,
@@ -1487,7 +1466,7 @@ static void control_task(void)
 }
 
 /** @brief 只发送两组 PID 的目标和反馈四列；115200/8N1，串口空闲即发最新值。
- *  @note 顺序：转向目标×1000、转向反馈×1000、速度目标×100、速度反馈×100。
+ *  @note 顺序：转向目标×1000、转向反馈×1000、速度目标pps、速度反馈pps。
  *        不发送表头或诊断列；只允许一帧在途，避免高频发送积压旧数据。
  */
 static void telemetry_task(uint32_t now)

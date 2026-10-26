@@ -88,12 +88,11 @@ static void enter(TrackMode target)
         case TRACK_LIMIT_LEFT: root_item=ROOT_SERVO;child_item=1;break;
         case TRACK_LIMIT_RIGHT: root_item=ROOT_SERVO;child_item=2;break;
         case TRACK_SERVO_DIRECTION: root_item=ROOT_SERVO;child_item=3;break;
-        case TRACK_SPEED: root_item=ROOT_MOTOR;child_item=1;break;
-        case TRACK_SPEED_TARGET: root_item=ROOT_MOTOR;child_item=0;break;
+        case TRACK_SPEED: root_item=ROOT_MOTOR;child_item=0;break;
         case TRACK_SPEED_PID: root_item=ROOT_PID;child_item=1;break;
         case TRACK_C4_TUNE: root_item=ROOT_PID;child_item=2;break;
-        case TRACK_LEFT_DIRECTION: root_item=ROOT_MOTOR;child_item=2;break;
-        case TRACK_RIGHT_DIRECTION: root_item=ROOT_MOTOR;child_item=3;break;
+        case TRACK_LEFT_DIRECTION: root_item=ROOT_MOTOR;child_item=1;break;
+        case TRACK_RIGHT_DIRECTION: root_item=ROOT_MOTOR;child_item=2;break;
         default:assert(0);return;
     }
     while(menu_item!=root_item)handle_keys(KEY_DOWN_EVENT);
@@ -338,7 +337,7 @@ int main(void)
     dump_screen("MDK/ui-servo-menu-1.bin");
     handle_keys(KEY_UP_EVENT);assert(menu_item==3);dump_screen("MDK/ui-servo-menu-2.bin");
     handle_keys(KEY_LEFT_EVENT|KEY_DOWN_EVENT);assert(menu_page==MENU_ROOT && menu_item==ROOT_SERVO);
-    menu_item=ROOT_MOTOR;handle_keys(KEY_OK_EVENT);assert(menu_page==MENU_MOTOR && menu_count()==4);
+    menu_item=ROOT_MOTOR;handle_keys(KEY_OK_EVENT);assert(menu_page==MENU_MOTOR && menu_count()==3);
     dump_screen("MDK/ui-menu-3.bin");handle_keys(KEY_LEFT_EVENT);
     menu_item=ROOT_PID;handle_keys(KEY_OK_EVENT);
     assert(mode==TRACK_MENU && menu_page==MENU_PID && menu_count()==3 && !track_guard_armed);
@@ -387,13 +386,12 @@ int main(void)
     sample_ok=1;handle_keys(KEY_LEFT_EVENT);
     c4_menu_tests();
     tuning_step_tests();
+    params.base_speed_pps=0;params.curve_speed_pps=0;
     enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_SPEED && oled_on);
-    enter(TRACK_SPEED_TARGET);handle_keys(KEY_RIGHT_EVENT);
-    for(n=0;n<20;n++)handle_keys(KEY_UP_EVENT);
-    handle_keys(KEY_OK_EVENT);assert(params.speed_base==20 && flash_params.speed_base==20);
-    handle_keys(KEY_DOWN_EVENT);handle_keys(KEY_RIGHT_EVENT);
-    for(n=0;n<10;n++)handle_keys(KEY_UP_EVENT);
-    handle_keys(KEY_OK_EVENT);assert(params.speed_curve==10);
+    params.base_speed_pps=2500;params.curve_speed_pps=1400;
+    params.legacy_speed_base=0;params.legacy_speed_curve=0; /* 不再要求额外速度目标。 */
+    enter(TRACK_SPEED);handle_keys(KEY_OK_EVENT);
+    assert(flash_params.base_speed_pps==2500 && flash_params.curve_speed_pps==1400);
     dump_screen("MDK/ui-speed-target.bin");handle_keys(KEY_LEFT_EVENT);
     old=params.kp100;enter(TRACK_SPEED_PID);step();assert(!track_guard_armed && !hw_left && !hw_servo);
     handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);handle_keys(KEY_OK_EVENT);
@@ -428,22 +426,22 @@ int main(void)
     assert(!strcmp(message,"FLASH ERASE FAILED") && flash_params.left==old);handle_keys(KEY_LEFT_EVENT);assert(params.left==old);store_fails=0;
     /* 速度页不依赖电感；编辑、保存与退出均不可使能执行器。 */
     enter(TRACK_SPEED);step();assert(mode==TRACK_SPEED && !track_guard_armed && !hw_servo && !hw_left);
-    old=params.base_duty;handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);
-    assert(params.base_duty==old+TRACK_SPEED_FINE_STEP);
-    handle_keys(KEY_LEFT_EVENT);assert(params.base_duty==old && !editing && mode==TRACK_SPEED);
+    old=params.base_speed_pps;handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);
+    assert(params.base_speed_pps==old+TRACK_SPEED_FINE_STEP);
+    handle_keys(KEY_LEFT_EVENT);assert(params.base_speed_pps==old && !editing && mode==TRACK_SPEED);
     handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_RIGHT_EVENT);handle_keys(KEY_UP_EVENT);
-    assert(params.base_duty==old+TRACK_SPEED_COARSE_STEP);
-    store_fails=1;handle_keys(KEY_OK_EVENT);assert(editing && flash_params.base_duty==old);
-    store_fails=0;handle_keys(KEY_OK_EVENT);assert(!editing && flash_params.base_duty==params.base_duty);
+    assert(params.base_speed_pps==old+TRACK_SPEED_COARSE_STEP);
+    store_fails=1;handle_keys(KEY_OK_EVENT);assert(editing && flash_params.base_speed_pps==old);
+    store_fails=0;handle_keys(KEY_OK_EVENT);assert(!editing && flash_params.base_speed_pps==params.base_speed_pps);
     handle_keys(KEY_DOWN_EVENT);assert(speed_item==1);handle_keys(KEY_RIGHT_EVENT);
     handle_keys(KEY_DOWN_EVENT);handle_keys(KEY_OK_EVENT);
-    assert(flash_params.curve_duty==TRACK_CURVE_MIN_DUTY-TRACK_SPEED_COARSE_STEP);
+    assert(flash_params.curve_speed_pps==TRACK_CURVE_SPEED_PPS-TRACK_SPEED_COARSE_STEP);
     dump_screen("MDK/ui-speed.bin");
     handle_keys(KEY_UP_EVENT);assert(speed_item==0);handle_keys(KEY_RIGHT_EVENT);
     for(n=0;n<40;n++)handle_keys(KEY_DOWN_EVENT);
-    assert(params.base_duty==params.curve_duty && strstr(message,"LIMIT"));handle_keys(KEY_LEFT_EVENT);
+    assert(params.base_speed_pps==params.curve_speed_pps && strstr(message,"LIMIT"));handle_keys(KEY_LEFT_EVENT);
     handle_keys(KEY_RIGHT_EVENT);for(n=0;n<40;n++)handle_keys(KEY_UP_EVENT);
-    assert(params.base_duty==TRACK_DUTY_MAX && strstr(message,"LIMIT"));handle_keys(KEY_LEFT_EVENT);
+    assert(params.base_speed_pps==TRACK_DUTY_MAX && strstr(message,"LIMIT"));handle_keys(KEY_LEFT_EVENT);
     step();assert(!hw_left && !hw_right && !hw_servo);
     handle_keys(KEY_LEFT_EVENT);assert(mode==TRACK_MENU);
 
@@ -486,17 +484,17 @@ int main(void)
     handle_keys(KEY_OK_EVENT);handle_keys(KEY_OK_EVENT);
     assert(!editing && flash_params.kp100==(uint16_t)(TRACK_PID_DEFAULT_KP*100.0f+0.5f) && flash_params.ki100==(uint16_t)(TRACK_PID_DEFAULT_KI*100.0f+0.5f) && flash_params.kd100==(uint16_t)(TRACK_PID_DEFAULT_KD*100.0f+0.5f));
     assert(params.center==before_restore.center && params.left==before_restore.left && params.right==before_restore.right);
-    assert(params.base_duty==before_restore.base_duty && params.curve_duty==before_restore.curve_duty && params.lost_sum==before_restore.lost_sum);
+    assert(params.base_speed_pps==before_restore.base_speed_pps && params.curve_speed_pps==before_restore.curve_speed_pps && params.lost_sum==before_restore.lost_sum);
     assert(params.servo_left_sign==-1 && params.left_reverse && params.right_reverse);
     step();assert(!hw_left && !hw_right);handle_keys(KEY_LEFT_EVENT);
     /* 发车前遗留的半帧刷新必须取消，行驶中所有 OLED 发送保持静默。 */
     display_busy=1;display_cursor=16;
     enter(TRACK_RUN);step();
     assert(mode==TRACK_RUN && encoder_fresh && encoder_elapsed==2 && hw_left==hw_right);
-    assert(speed_control.target>0.049f && speed_control.target<0.051f);
-    assert(hw_left<=2U*TRACK_SPEED_PWM_RISE_PER_MS);
+    assert(speed_control.target==params.base_speed_pps/100.0f);
+    assert(hw_left>4 && hw_left<=TRACK_DUTY_MAX);
     for(n=0;n<9;n++){step();assert(encoder_fresh && encoder_elapsed==2 && mode==TRACK_RUN);}
-    assert(speed_control.target>0.499f && speed_control.target<0.501f);
+    assert(speed_control.target==params.base_speed_pps/100.0f);
     last_control=TrackHW_Now(); /* 前面直接调用控制函数，接下来切回真实主循环调度。 */
     assert(display_off && !oled_on && !display_busy && !display_cursor);
     {
@@ -509,7 +507,7 @@ int main(void)
         assert(oled_commands==commands && oled_data_bytes==bytes && oled_positions==positions);
         for(n=0;n<sizeof(framebuffer);n++)assert(framebuffer[n]==0xa5);
     }
-    for(n=0;n<TRACK_DUTY_MAX/TRACK_MOTOR_RAMP+1;n++)step();assert(hw_left>0 && hw_left==hw_right && hw_left<=params.base_duty);
+    for(n=0;n<100;n++)step();assert(hw_left>0 && hw_left==hw_right && hw_left<=TRACK_DUTY_MAX);
     dump_screen("MDK/ui-run.bin");
     old=hw_servo;fake_raw[0]=fake_raw[1]=0;step();
     assert(mode==TRACK_RUN && !control.signal_ok && hw_servo==old && hw_left>0 && hw_left<=600);
@@ -549,9 +547,9 @@ int main(void)
     handle_keys(KEY_OK_EVENT);assert(sensors.valid && !sensors.center_valid && sensors.center_bias==0);
     enter(TRACK_RUN);assert(mode==TRACK_MENU && fault==TRACK_NO_CENTER && !hw_left);
     /* Held startup key cannot enter any page, but menu still renders. */
-    old=params.base_duty;
+    old=params.base_speed_pps;
     TrackApp_Init();assert(!sensors.valid && !sensors.center_valid && !defaults_loaded);
-    assert(params.base_duty==old && params.center==TRACK_SERVO_DEFAULT_CENTER+1);
+    assert(params.base_speed_pps==old && params.center==TRACK_SERVO_DEFAULT_CENTER+1);
     assert(params.servo_left_sign==-1 && hw_left_reverse && hw_right_reverse);
     P27=0;track_key_events=KEY_OK_EVENT;TrackApp_Task();assert(mode==TRACK_MENU);
     P27=1;track_milliseconds+=30;TrackApp_Task();assert(!startup_keys_locked && mode==TRACK_MENU);

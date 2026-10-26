@@ -69,7 +69,7 @@ static void pid_tests(void)
     memset(&s,0,sizeof(s)); TrackControl_Reset(&c,&p);
     assert(TrackControl_Step(&c,&s,&p,1)==TRACK_NO_CAL);
     s.valid=1; s.norm[0]=500; s.norm[1]=500;
-    assert(TrackControl_Step(&c,&s,&p,1)==TRACK_OK && c.servo==p.center && c.left_motor<=TRACK_MOTOR_RAMP);
+    assert(TrackControl_Step(&c,&s,&p,1)==TRACK_OK && c.servo==p.center && c.left_motor==0);
     s.norm[0]=900; s.norm[1]=100;
     for(n=0;n<100;n++) {
         assert(TrackControl_Step(&c,&s,&p,0)==TRACK_OK);
@@ -266,7 +266,7 @@ static void loss_confirmation_tests(void)
         {TRACK_HARD_LOST_EACH-1,TRACK_HARD_LOST_EACH-1,120},
         {TRACK_HARD_LOST_EACH,TRACK_HARD_LOST_EACH,250},{0,19,250}};
 
-    TrackParams_Default(&params);params.base_duty=4000;params.curve_duty=1000;
+    TrackParams_Default(&params);params.base_speed_pps=4000;params.curve_speed_pps=1000;
     params.lost_sum=150; /* 此用例固定总强度，分别验证弱信号和双路近零。 */
     assert(TrackParams_Valid(&params));
     memset(&sensors,0,sizeof(sensors));sensors.valid=1;
@@ -308,10 +308,10 @@ static void loss_confirmation_tests(void)
     sensors.norm[0]=sensors.norm[1]=500;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && !control.weak_ms && !control.zero_ms);
     TrackControl_Reset(&control,&params);sensors.norm[0]=sensors.norm[1]=0;
-    params.curve_duty=300;
+    params.curve_speed_pps=300;
     control.left_motor=200;control.right_motor=400;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
-    assert(control.left_motor==200 && control.right_motor==300);
+    assert(control.left_motor==200 && control.right_motor==400);
     assert(TrackControl_Step(&control,&sensors,&params,0)==TRACK_OK && !control.left_motor && !control.right_motor);
     /* EEPROM 旧阈值仍可为 150，但行驶门槛限制到 20；静态 PID 仍使用原值。 */
     TrackControl_Reset(&control,&params);sensors.norm[0]=sensors.norm[1]=30;
@@ -340,8 +340,8 @@ static void store_tests(void)
     p=q;p.kp100=4200;assert(TrackStore_Save(&p));
     assert(TrackStore_Load(&q) && q.kp100==4200);
     /* 回归：失线阈值 40 和动力 4000 必须能一起写入、重读且再次保存免擦写。 */
-    p.base_duty=4000;p.curve_duty=3000;p.lost_sum=40;assert(TrackStore_Save(&p));
-    assert(TrackStore_Load(&q) && q.base_duty==4000 && q.curve_duty==3000 && q.lost_sum==40);
+    p.base_speed_pps=4000;p.curve_speed_pps=3000;p.lost_sum=40;assert(TrackStore_Save(&p));
+    assert(TrackStore_Load(&q) && q.base_speed_pps==4000 && q.curve_speed_pps==3000 && q.lost_sum==40);
     mutations=0;fail_after=0;
     assert(TrackStore_Save(&q) && mutations==0);
     fail_after=-1;
@@ -352,17 +352,17 @@ static void store_tests(void)
     p.lost_sum=500;assert(TrackParams_Valid(&p));
     p.lost_sum=40;
     puts("PASS: loss threshold 40 and speed 4000 persist; invalid thresholds are rejected");
-    p.speed_base=20;p.speed_curve=10;p.speed_kp100=1234;p.speed_ki100=5678;p.speed_kd100=89;
+    p.legacy_speed_base=20;p.legacy_speed_curve=10;p.speed_kp100=1234;p.speed_ki100=5678;p.speed_kd100=89;
     assert(TrackStore_Save(&p));
-    assert(TrackStore_Load(&q) && q.speed_base==20 && q.speed_curve==10 &&
+    assert(TrackStore_Load(&q) && q.legacy_speed_base==20 && q.legacy_speed_curve==10 &&
            q.speed_kp100==1234 && q.speed_ki100==5678 && q.speed_kd100==89);
     memcpy(baseline,flash_memory,1024);
     for(cut=0;cut<(int)TRACK_STORE_RECORD_BYTES+1;cut++)
     {
         memcpy(flash_memory,baseline,1024);fail_after=-1;assert(TrackStore_Load(&p));
-        p.speed_base=30;p.speed_ki100=6000;mutations=0;fail_after=cut;
+        p.legacy_speed_base=30;p.speed_ki100=6000;mutations=0;fail_after=cut;
         assert(!TrackStore_Save(&p));
-        fail_after=-1;assert(TrackStore_Load(&q) && q.speed_base==20 && q.speed_ki100==5678);
+        fail_after=-1;assert(TrackStore_Load(&q) && q.legacy_speed_base==20 && q.speed_ki100==5678);
     }
     p=q;
     puts("PASS: speed targets/gains persist atomically with legacy controls across all 81 power-cut points");
@@ -389,7 +389,7 @@ static void c4_store_tests(void)
     fixture_u16(flash_memory+44,4321);fixture_u16(flash_memory+46,3456);fixture_u16(flash_memory+48,12);
     memcpy(flash_memory+50,flash_memory+28,2);
     crc=TrackCRC16(flash_memory+32,28);fixture_u16(flash_memory+60,crc);flash_memory[63]=0x5a;
-    assert(TrackStore_Load(&q) && q.speed_base==25 && q.speed_kp100==4321 && q.speed_ki100==3456 &&
+    assert(TrackStore_Load(&q) && q.legacy_speed_base==25 && q.speed_kp100==4321 && q.speed_ki100==3456 &&
            q.c4_a==TRACK_FOUR_WEIGHT_A && q.c4_b==TRACK_FOUR_WEIGHT_B && q.c4_c==TRACK_FOUR_WEIGHT_C);
     memcpy(legacy,flash_memory,sizeof(legacy));
     fixture_u16(flash_memory+52,123);fixture_u16(flash_memory+54,234);fixture_u16(flash_memory+56,345);
@@ -400,7 +400,7 @@ static void c4_store_tests(void)
         memcpy(flash_memory,legacy,sizeof(legacy));fail_after=-1;assert(TrackStore_Load(&p));
         p.c4_a=321;p.c4_b=654;p.c4_c=987;p.speed_kp100=100000UL;
         mutations=0;fail_after=cut;assert(!TrackStore_Save(&p));
-        fail_after=-1;assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A && q.speed_base==25 && q.speed_kp100==4321);
+        fail_after=-1;assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A && q.legacy_speed_base==25 && q.speed_kp100==4321);
     }
     memcpy(flash_memory,legacy,sizeof(legacy));assert(TrackStore_Load(&p));
     p.c4_a=321;p.c4_b=654;p.c4_c=987;p.speed_kp100=100000UL;p.speed_ki100=250000UL;p.speed_kd100=500000UL;
@@ -409,6 +409,9 @@ static void c4_store_tests(void)
            q.speed_kp100==100000UL && q.speed_ki100==250000UL && q.speed_kd100==500000UL);
     mutations=0;fail_after=0;assert(TrackStore_Save(&q) && mutations==0);fail_after=-1;
     memcpy(saved,flash_memory,sizeof(saved));
+    memset(flash_memory+512+64,0xff,12);
+    fixture_u16(flash_memory+512+76,TrackCRC16(flash_memory+512+32,44));
+    assert(TrackStore_Load(&q) && q.base_speed_pps==TRACK_BASE_SPEED_PPS && q.curve_speed_pps==TRACK_CURVE_SPEED_PPS && q.speed_kp100==100000UL);
     for(cut=0;cut<(int)TRACK_STORE_RECORD_BYTES+1;cut++)
     {
         memcpy(flash_memory,saved,sizeof(saved));assert(TrackStore_Load(&p));
@@ -416,8 +419,11 @@ static void c4_store_tests(void)
         assert(!TrackStore_Save(&p));fail_after=-1;
         assert(TrackStore_Load(&q) && q.c4_a==321 && q.speed_kp100==100000UL && q.speed_kd100==500000UL);
     }
+    memcpy(flash_memory,saved,sizeof(saved));flash_memory[512+64]='X';
+    fixture_u16(flash_memory+512+76,TrackCRC16(flash_memory+512+32,44));
+    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A);
     memcpy(flash_memory,saved,sizeof(saved));flash_memory[512+44]^=1;
-    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A && q.speed_base==25);
+    assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A && q.legacy_speed_base==25);
     memcpy(flash_memory,saved,sizeof(saved));flash_memory[512+32]='X';
     fixture_u16(flash_memory+512+76,TrackCRC16(flash_memory+512+32,44));
     assert(TrackStore_Load(&q) && q.c4_a==TRACK_FOUR_WEIGHT_A);
