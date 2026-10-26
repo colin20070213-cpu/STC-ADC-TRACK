@@ -38,7 +38,7 @@ uint8_t TrackSpeed_Measure(TrackSpeedState *state, uint16_t pulses, uint16_t ela
     }
     else
     {
-        state->feedback += TRACK_SPEED_FEEDBACK_ALPHA *
+        state->feedback += ((float)elapsed_ms / (TRACK_SPEED_FEEDBACK_TAU_MS + elapsed_ms)) *
                            (state->raw_feedback - state->feedback);
     }
     return 1;
@@ -79,7 +79,7 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
         state->initialized = 1;
     }
     /* 对测量做微分，避免按键改变目标时产生微分突跳。 */
-    state->derivative += TRACK_SPEED_D_FILTER *
+    state->derivative += ((float)elapsed_ms / (TRACK_SPEED_D_TAU_MS + elapsed_ms)) *
         ((state->last_feedback - state->feedback) / dt - state->derivative);
     state->last_feedback = state->feedback;
     state->p_term = params->speed_kp100 * 0.01f * error;

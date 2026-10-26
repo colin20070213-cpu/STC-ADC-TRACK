@@ -31,6 +31,7 @@ typedef enum
     MENU_CALIBRATION,
     MENU_SERVO,
     MENU_MOTOR,
+    MENU_PID,
     MENU_PAGE_COUNT
 } MenuPage;
 
@@ -52,7 +53,8 @@ typedef enum
     LABEL_BODY_CENTER, LABEL_SPEED, LABEL_PID_RESTORE,
     LABEL_CAL_GROUP, LABEL_SERVO_GROUP, LABEL_MOTOR_GROUP,
     LABEL_SERVO_DIRECTION, LABEL_LEFT_DIRECTION, LABEL_RIGHT_DIRECTION,
-    LABEL_NORMAL, LABEL_REVERSED, LABEL_SPEED_PID, LABEL_PWM_LIMIT
+    LABEL_NORMAL, LABEL_REVERSED, LABEL_SPEED_PID, LABEL_PWM_LIMIT,
+    LABEL_STEERING_TUNE, LABEL_SPEED_TUNE
 } UILabel;
 
 typedef struct
@@ -77,10 +79,14 @@ static const MenuEntry servo_menu[] =
     {LABEL_SERVO_RIGHT, TRACK_LIMIT_RIGHT},
     {LABEL_SERVO_DIRECTION, TRACK_SERVO_DIRECTION}
 };
+static const MenuEntry pid_menu[] =
+{
+    {LABEL_STEERING_TUNE, TRACK_PID},
+    {LABEL_SPEED_TUNE, TRACK_SPEED_PID}
+};
 static const MenuEntry motor_menu[] =
 {
     {LABEL_SPEED, TRACK_SPEED_TARGET},
-    {LABEL_SPEED_PID, TRACK_SPEED_PID},
     {LABEL_PWM_LIMIT, TRACK_SPEED},
     {LABEL_LEFT_DIRECTION, TRACK_LEFT_DIRECTION},
     {LABEL_RIGHT_DIRECTION, TRACK_RIGHT_DIRECTION}
@@ -193,7 +199,8 @@ static uint8_t menu_count(void)
     {
         case MENU_CALIBRATION: return 2;
         case MENU_SERVO:       return 4;
-        case MENU_MOTOR:       return 5;
+        case MENU_MOTOR:       return 4;
+        case MENU_PID:         return 2;
         default:               return ROOT_ITEM_COUNT;
     }
 }
@@ -205,6 +212,7 @@ static const MenuEntry *submenu_entries(void)
     {
         case MENU_SERVO: return servo_menu;
         case MENU_MOTOR: return motor_menu;
+        case MENU_PID:   return pid_menu;
         default:         return calibration_menu;
     }
 }
@@ -217,6 +225,7 @@ static uint8_t menu_title(void)
         case MENU_CALIBRATION: return LABEL_CAL_GROUP;
         case MENU_SERVO:       return LABEL_SERVO_GROUP;
         case MENU_MOTOR:       return LABEL_MOTOR_GROUP;
+        case MENU_PID:         return LABEL_PID;
         default:               return LABEL_MAIN;
     }
 }
@@ -332,7 +341,8 @@ static void render_menu(void)
     label_at(0, 0, menu_title());
     sprintf(text_line, "%u/%u", (unsigned int)menu_item + 1, (unsigned int)count);
     text_at(104, 1, text_line);
-    text_at(70, 0, fault != TRACK_OK ? fault_name(fault) :
+    /* PID 大类标题有五字，状态文字从标题末尾之后开始，避免覆盖中文字模。 */
+    text_at(menu_page == MENU_PID ? 86 : 70, 0, fault != TRACK_OK ? fault_name(fault) :
             (menu_page == MENU_ROOT ? (defaults_loaded ? "DEFAULT" : "READY") : "<:BACK"));
     first_item = (menu_item / 3) * 3;
     if (count > 3 && first_item > count - 3)
@@ -718,7 +728,7 @@ static void enter_menu_item(void)
             case ROOT_CALIBRATION: open_menu_page(MENU_CALIBRATION); return;
             case ROOT_SERVO:       open_menu_page(MENU_SERVO); return;
             case ROOT_MOTOR:       open_menu_page(MENU_MOTOR); return;
-            case ROOT_PID:         target = TRACK_PID; break;
+            case ROOT_PID:         open_menu_page(MENU_PID); return;
             case ROOT_RUN:         target = TRACK_RUN; break;
             default:               return;
         }
@@ -775,12 +785,12 @@ static void enter_menu_item(void)
                 fault = TRACK_NO_SPEED;
                 break;
             }
-            if (!TrackHW_EncoderSnapshot(&encoder_last_count, &encoder_direction))
+            if (!TrackHW_EncoderSample(&encoder_last_count, &encoder_direction, &last_encoder) ||
+                (uint32_t)(TrackHW_Now() - last_encoder) > TRACK_ENCODER_STALE_MS)
             {
                 fault = TRACK_ENCODER_ERROR;
                 break;
             }
-            last_encoder = TrackHW_Now();
             encoder_ok = 1;
             encoder_fresh = 0;
             /* 先熄屏、取消未完成的分片刷新，再允许执行器工作。 */
@@ -1273,26 +1283,30 @@ static void handle_adc_failure(void)
     }
 }
 
-/** @brief 10ms 读取原编码器库快照；前进测速使用脉冲幅值，方向原电平单独遥测。 */
+/** @brief 每 2ms 消费最新 1ms 计数快照；换算单位仍为计数/10ms。 */
 static void encoder_task(uint32_t now)
 {
     uint16_t count;
     uint8_t direction;
+    uint32_t sampled_ms;
     uint32_t elapsed = now - last_encoder;
 
     encoder_fresh = 0;
     if (elapsed < TRACK_SPEED_PERIOD_MS) return;
-    if (!TrackHW_EncoderSnapshot(&count, &direction))
+    if (!TrackHW_EncoderSample(&count, &direction, &sampled_ms) ||
+        (uint32_t)(TrackHW_Now() - sampled_ms) > TRACK_ENCODER_STALE_MS)
     {
         encoder_ok = 0;
         last_encoder = now;
         return;
     }
+    elapsed = sampled_ms - last_encoder;
+    if (elapsed == 0) return; /* 同一计数快照不能重复积分。 */
     encoder_direction = direction;
     encoder_elapsed = elapsed > 65535UL ? 65535U : (uint16_t)elapsed;
     encoder_ok = TrackSpeed_Measure(&speed_control, (uint16_t)(count - encoder_last_count), encoder_elapsed);
     encoder_last_count = count;
-    last_encoder = now;
+    last_encoder = sampled_ms;
     encoder_fresh = encoder_ok;
 }
 
@@ -1511,7 +1525,7 @@ void TrackApp_Init(void)
     TrackHW_Keys();
     last_control = TrackHW_Now();
     last_encoder = last_control;
-    encoder_ok = TrackHW_EncoderSnapshot(&encoder_last_count, &encoder_direction);
+    encoder_ok = TrackHW_EncoderSample(&encoder_last_count, &encoder_direction, &last_encoder);
     encoder_fresh = 0;
     speed_control.measured = 0;
     last_display = last_control - TRACK_DISPLAY_PERIOD_MS;

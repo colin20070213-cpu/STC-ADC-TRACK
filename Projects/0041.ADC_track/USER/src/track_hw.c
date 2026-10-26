@@ -49,6 +49,13 @@ static uint8_t tx_data[TRACK_TX_SIZE];
 static uint8_t key_count[5];  /**< 按下/松开的消抖计数。 */
 static uint8_t key_stable[5]; /**< 已确认的按下状态。 */
 static uint16_t key_hold[5];  /**< 长按计时；只有上下键连发。 */
+/* 编码器在 TIM0 里采集，前台只复制，避免 C251 非重入库被中断重入。 */
+static volatile uint16_t encoder_sample_count;
+static volatile uint32_t encoder_sample_ms;
+static volatile uint8_t encoder_sample_direction;
+static volatile uint8_t encoder_sample_ready;
+static volatile uint8_t encoder_sample_error;
+
 static uint16_t motor_period;
 static uint16_t servo_period;
 static uint8_t motor_left_reverse = TRACK_LEFT_REVERSE;
@@ -192,6 +199,26 @@ void TrackHW_AdcISR(void)
     ADC_CONTR = 0xC0 | sensor_pins[adc_channel];
 }
 
+/** @brief 只读 TIM3 整数快照；最多三次高低字节一致性尝试，不等待边沿。 */
+static void encoder_capture_tick(void)
+{
+    uint16_t count;
+    uint8_t direction;
+
+    if (Encoder_Snapshot(&count, &direction))
+    {
+        encoder_sample_count = count;
+        encoder_sample_direction = direction;
+        encoder_sample_ms = track_milliseconds;
+        encoder_sample_ready = 1;
+    }
+    else
+    {
+        encoder_sample_error = 1;
+        if (track_guard_armed) TrackHW_Stop();
+    }
+}
+
 void TrackHW_TickISR(void)
 {
     uint8_t key_index;
@@ -204,6 +231,7 @@ void TrackHW_TickISR(void)
         track_guard_trip = 1;
         TrackHW_Stop();
     }
+    encoder_capture_tick();
     adc_start_frame();
     pressed = (!P42 ? KEY_UP_EVENT : 0) | (!P46 ? KEY_DOWN_EVENT : 0) |
               (!P45 ? KEY_LEFT_EVENT : 0) | (!P41 ? KEY_RIGHT_EVENT : 0) |
@@ -321,7 +349,13 @@ void TrackHW_Init(void)
     PADCH = 0;
     EADC = 1;
     adc_enabled = 1;
-    Encoder_Init(); /* TIM3/P04 计数，P52 方向；不占用 TIM0 时基或 TIM1 串口。 */
+    Encoder_Init(); /* TIM3/P04 计数，P52 原始电平；不占用 TIM0/TIM1。 */
+    encoder_sample_ready = 0;
+    encoder_sample_error = 0;
+    encoder_sample_count = 0;
+    encoder_sample_direction = 0;
+    encoder_sample_ms = 0;
+    /* 首个快照由 TIM0 发布；采集函数仅有 ISR 一个调用上下文，避免 C251 非重入警告。 */
     UART_Init(UART_1, UART1_RX_P43, UART1_TX_P44, TRACK_UART_BAUD, TIM1);
     /* 库的 TIM0 清标志实现存在 TF1 操作，本工程中断入口显式清 TF0。 */
     PIT_Timer_Ms(TIM0, 1);
@@ -449,7 +483,24 @@ void TrackHW_Set(uint16_t servo, uint16_t left, uint16_t right, uint8_t motor_en
 
 uint8_t TrackHW_EncoderSnapshot(uint16_t *count, uint8_t *direction)
 {
-    return Encoder_Snapshot(count, direction);
+    uint32_t sample_ms;
+
+    return TrackHW_EncoderSample(count, direction, &sample_ms);
+}
+
+uint8_t TrackHW_EncoderSample(uint16_t *count, uint8_t *direction, uint32_t *sample_ms)
+{
+    uint8_t ready;
+    uint8_t previous_irq = EA;
+
+    EA = 0;
+    ready = encoder_sample_ready && !encoder_sample_error;
+    *count = encoder_sample_count;
+    *direction = encoder_sample_direction;
+    *sample_ms = encoder_sample_ms;
+    encoder_sample_error = 0;
+    EA = previous_irq;
+    return ready;
 }
 
 void TrackHW_FeedWatchdog(void)

@@ -4,7 +4,7 @@ import struct
 import zlib
 
 root = Path(__file__).resolve().parent.parent/'MDK'
-names = ['menu-1','menu-2','cal-menu','servo-menu-1','servo-menu-2','menu-3',
+names = ['menu-1','menu-2','cal-menu','servo-menu-1','servo-menu-2','menu-3','pid-menu',
          'cal','body-capture','body-ready','pid','pid-restore','pid-confirm',
          'servo-direction','left-direction','right-direction','speed-target','speed-pid','speed','servo','run','lost']
 scale, gap = 4, 12

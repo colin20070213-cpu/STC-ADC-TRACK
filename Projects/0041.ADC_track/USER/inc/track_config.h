@@ -91,7 +91,9 @@
 /* 右后轮单编码器速度环。速度单位为 P04 计数/10ms；未知每圈计数时不换算 m/s。
  * 默认目标为 0，需在“电机设置→速度设定”设置非零基础速度后发车。
  * 原 BASE/CURVE PWM 参数继续作为直线/弯道动力上限，不能当作速度值迁移。 */
-#define TRACK_SPEED_PERIOD_MS       10U
+#define TRACK_ENCODER_SAMPLE_MS     1U  /* TIM0 保存原始计数快照，不等待脉冲。 */
+#define TRACK_ENCODER_STALE_MS      2U  /* 前台拒绝超期的计数快照。 */
+#define TRACK_SPEED_PERIOD_MS       2U  /* 速度闭环每两个编码器快照更新。 */
 #define TRACK_SPEED_BASE_DEFAULT    0U
 #define TRACK_SPEED_CURVE_DEFAULT   0U
 #define TRACK_SPEED_TARGET_MAX      1000U
@@ -105,8 +107,8 @@
 #define TRACK_SPEED_DEFAULT_KD       0.00f
 #endif
 #define TRACK_SPEED_GAIN_MAX_X100    50000U
-#define TRACK_SPEED_FEEDBACK_ALPHA   0.50f
-#define TRACK_SPEED_D_FILTER         0.25f
+#define TRACK_SPEED_FEEDBACK_TAU_MS  10.0f /* 轮速低通时间常数，抑制短窗口量化跳动。 */
+#define TRACK_SPEED_D_TAU_MS         30.0f /* 测量微分低通时间常数，与实际 dt 配合。 */
 #define TRACK_SPEED_RAMP_PER_SECOND  25.0f /* 每秒增加的目标计数/10ms。 */
 #define TRACK_SPEED_PWM_RISE_PER_MS  2U
 #define TRACK_SPEED_STALL_DUTY       1000U
@@ -135,6 +137,9 @@
 
 #if TRACK_LEFT_TRIM != TRACK_RIGHT_TRIM
 #error Single-encoder common speed control requires equal left and right trim
+#endif
+#if TRACK_ENCODER_SAMPLE_MS != 1 || TRACK_SPEED_PERIOD_MS % TRACK_ENCODER_SAMPLE_MS != 0
+#error Encoder snapshots require the 1ms tick and an integer speed period multiple
 #endif
 #if TRACK_SPEED_PERIOD_MS < TRACK_PERIOD_MS || TRACK_SPEED_PERIOD_MS % TRACK_PERIOD_MS != 0
 #error Invalid speed loop period

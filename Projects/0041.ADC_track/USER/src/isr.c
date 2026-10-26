@@ -36,7 +36,7 @@
 
 #include "track_hw.h"
 
-/** @brief 1ms 时基：处理计时、按键、截止保护，并触发一帧非阻塞 ADC 扫描。 */
+/** @brief 1ms 时基：处理计时、按键、截止保护、编码器快照，并触发一帧非阻塞 ADC 扫描。 */
 void TM0_Isr(void) interrupt 1
 {
     TF0 = 0;

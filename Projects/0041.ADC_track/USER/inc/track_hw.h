@@ -24,7 +24,7 @@ extern volatile uint16_t track_tx_dropped;   /**< 串口队列满时丢弃的新
 
 /** @brief 先设置安全电平，再初始化 PWM、ADC、按键、UART 和 1ms 时基。 */
 void TrackHW_Init(void);
-/** @brief 由 TIM0 每 1ms 调用，处理截止保护及按键消抖，不做浮点运算。 */
+/** @brief 由 TIM0 每 1ms 调用，处理截止保护、按键消抖和编码器快照，不做浮点运算。 */
 void TrackHW_TickISR(void);
 /** @brief ADC 转换完成中断入口；无等待、浮点或乘除库调用。 */
 void TrackHW_AdcISR(void);
@@ -51,8 +51,13 @@ uint8_t TrackHW_Keys(void);
 uint8_t TrackHW_Sample(uint16_t *values);
 /** @brief 喂硬件看门狗；不从周期中断持续喂狗。 */
 void TrackHW_FeedWatchdog(void);
-/** @brief 复用原库 P04/P52 编码器快照；失败返回 0。 */
+/** @brief 原子复制 TIM0 发布的最近计数快照；失败返回 0，不在前台读 TIM3。 */
 uint8_t TrackHW_EncoderSnapshot(uint16_t *count, uint8_t *direction);
+/** @brief 同时复制计数、方向电平及采集时刻；未就绪或采集错误返回 0。
+ *  @note 1ms 中断只发布整数快照；前台按 sample_ms 的实际差值换算速度。
+ *        任何两次读取间发生的采集错误会锁存至读取，不会被后续成功样本掩盖。
+ */
+uint8_t TrackHW_EncoderSample(uint16_t *count, uint8_t *direction, uint32_t *sample_ms);
 /** @brief 读取最新有效 Flash 记录；无记录时加载代码初值并返回 0。 */
 uint8_t TrackStore_Load(TrackParams *params);
 /** @brief 最近一次保存结果，用于区分参数、擦除、写入及回读故障。 */

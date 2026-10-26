@@ -24,8 +24,16 @@ void PWM_Init(uint8_t pin,uint32_t freq,uint32_t duty)
     }
     else {PWMA_ARRH=period>>8;PWMA_ARRL=(uint8_t)period;}
 }
+static uint16_t encoder_count=123;
+static uint8_t encoder_good=1;
+static unsigned encoder_calls;
 void Encoder_Init(void) {}
-uint8_t Encoder_Snapshot(uint16_t *count,uint8_t *direction) { *count=123;*direction=1;return 1; }
+uint8_t Encoder_Snapshot(uint16_t *count,uint8_t *direction)
+{
+    ++encoder_calls;
+    if(!encoder_good)return 0;
+    *count=encoder_count;*direction=1;return 1;
+}
 void ADC_Init(uint8_t pin,uint8_t speed){(void)pin;(void)speed;}
 void UART_Init(uint8_t u,uint8_t rx,uint8_t tx,uint32_t b,uint8_t t)
 {
@@ -72,11 +80,39 @@ static void servo_pulse_tests(void)
            (unsigned long)configured_servo_hz);
 }
 
+/** @brief 直接验证真实 TIM0 每毫秒取样、原子带时刻复制及中间失败锁存。 */
+static void encoder_sampling_tests(void)
+{
+    uint16_t count;uint8_t direction;uint32_t stamp;
+    unsigned before=encoder_calls,n;
+    uint32_t started=track_milliseconds;
+    for(n=1;n<=20;n++)
+    {
+        encoder_count=(uint16_t)(65530U+n);tick(1);
+        assert(encoder_calls==before+n);
+        assert(TrackHW_EncoderSample(&count,&direction,&stamp));
+        assert(count==(uint16_t)(65530U+n) && direction==1 && stamp==started+n);
+        assert(EA==1);
+    }
+    encoder_count=33; /* 前台重复读取不能访问硬件或取走尚未采集的计数。 */
+    assert(TrackHW_EncoderSnapshot(&count,&direction) && count==14);
+    assert(encoder_calls==before+20);
+    EA=0;assert(TrackHW_EncoderSample(&count,&direction,&stamp) && !EA);EA=1;
+    TrackHW_Arm(1);TrackHW_Set(750,1000,1000,1);
+    encoder_good=0;tick(1);assert(!(PWMA_ENO&0x55) && !(PWMB_ENO&1));
+    encoder_good=1;tick(1);
+    assert(!TrackHW_EncoderSample(&count,&direction,&stamp)); /* 成功帧不能掩盖前一毫秒失败。 */
+    assert(TrackHW_EncoderSample(&count,&direction,&stamp) && count==33);
+    TrackHW_Arm(0);
+    puts("PASS: 1ms timer encoder snapshots, timestamp/65535 wrap, atomic copy, no foreground hardware read and latched sample failure");
+}
+
 int main(void)
 {
-    uint16_t values[4];unsigned n;char chunk[101];
+    uint16_t values[4],count;uint8_t direction;uint32_t stamp;unsigned n;char chunk[101];
     TrackHW_Init();assert(!(PWMA_ENO&0x55) && !(PWMB_ENO&1) && P60 && P62 && P64 && P66 && !P74);
     assert(configured_baud==9600UL && EADC && !PADC && !PADCH);
+    assert(!TrackHW_EncoderSample(&count,&direction,&stamp)); /* 首次 1ms tick 前未就绪。 */
     assert(!TrackHW_Sample(values)); /* 未完成首帧时立即返回，不等待。 */
     for(n=0;n<100;n++) {
         unsigned k;
@@ -85,6 +121,9 @@ int main(void)
         for(k=0;k<TRACK_SENSOR_COUNT;k++)assert(values[k]==1002+k*10);
     }
     assert(track_adc_frames==100 && track_adc_overruns==0);
+    encoder_sampling_tests();
+    TrackHW_Init(); /* 后续原 ADC 断言从同样的帧计数继续。 */
+    for(n=0;n<100;n++)tick(1);
     /* 在第二帧尚未完成时，读取必须仍返回上一整帧，不混合两帧。 */
     TrackHW_TickISR();
     assert(TrackHW_Sample(values) && values[0]==1002);
