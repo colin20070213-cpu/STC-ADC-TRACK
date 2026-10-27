@@ -3,7 +3,8 @@
 void Encoder_Init(void);
 uint8_t Encoder_Snapshot(uint16_t *count,uint8_t *direction);
 #define FOSC 33177600UL
-extern uint8_t EADC,PADC,PADCH;
+extern uint8_t EADC,PADC,PADCH,ES;
+extern volatile uint8_t UART_BUSY[5];
 extern uint8_t EA,P42,P46,P45,P41,P27,P60,P62,P64,P66,P74,PT0;
 extern uint8_t PWMA_ENO,PWMB_ENO,PWMA_ARRH,PWMA_ARRL,PWMB_ARRH,PWMB_ARRL;
 extern uint8_t PWMA_CCR1H,PWMA_CCR1L,PWMA_CCR2H,PWMA_CCR2L;
@@ -20,5 +21,6 @@ void GPIO_PinPullConfig(uint8_t port,uint8_t pin,uint8_t mode);
 void PWM_Init(uint8_t pin,uint32_t freq,uint32_t duty);
 void ADC_Init(uint8_t pin,uint8_t speed);
 void UART_Init(uint8_t uart,uint8_t rx,uint8_t tx,uint32_t baud,uint8_t timer);
+void UART_PutStr(uint8_t uart,uint8_t *text);
 void PIT_Timer_Ms(uint8_t timer,uint16_t period);
 #endif

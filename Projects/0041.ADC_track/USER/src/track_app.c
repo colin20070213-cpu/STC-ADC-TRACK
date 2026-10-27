@@ -1467,7 +1467,7 @@ static void control_task(void)
 
 /** @brief 只发送两组 PID 的目标和反馈四列；115200/8N1，串口空闲即发最新值。
  *  @note 顺序：转向目标×1000、转向反馈×1000、速度指令、换算到相同 PWM 刻度的速度反馈。
- *        不发送表头或诊断列；只允许一帧在途，避免高频发送积压旧数据。
+ *        不发送表头或诊断列；使用原库 UART_PutStr 发送，保留库内逐字节等待。
  */
 static void telemetry_task(uint32_t now)
 {
@@ -1475,7 +1475,7 @@ static void telemetry_task(uint32_t now)
     {
         return;
     }
-    if (!TrackUART_IsIdle()) return; /* 未发完时立即退出，既不排队旧帧，也不忙等。 */
+    if (!TrackUART_IsIdle()) return; /* 末字节未完成不生成下一帧；本帧由原库发送。 */
 #if TRACK_TELEMETRY_MS > 0
     if ((uint32_t)(now - last_telemetry) < TRACK_TELEMETRY_MS) return;
 #endif
@@ -1483,7 +1483,7 @@ static void telemetry_task(uint32_t now)
             (int)TRACK_STEERING_TARGET1000, TrackSensors_Feedback(&sensors, &params),
             (long)speed_control.command,
             (long)TrackSpeed_FeedbackCommand(&speed_control));
-    if (TrackUART_Queue(telemetry)) last_telemetry = now;
+    if (TrackUART_Send(telemetry)) last_telemetry = now;
 }
 
 void TrackApp_Init(void)

@@ -3,7 +3,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-uint8_t EADC,PADC,PADCH;
+uint8_t EADC,PADC,PADCH,ES;
+volatile uint8_t UART_BUSY[5];
+static unsigned uart_string_calls;
+static char uart_string[128];
 uint8_t EA=1,P42=1,P46=1,P45=1,P41=1,P27=1,P60,P62,P64,P66,P74,PT0;
 uint8_t PWMA_ENO,PWMB_ENO,PWMA_ARRH,PWMA_ARRL,PWMB_ARRH,PWMB_ARRL;
 uint8_t PWMA_CCR1H,PWMA_CCR1L,PWMA_CCR2H,PWMA_CCR2L;
@@ -38,7 +41,21 @@ void ADC_Init(uint8_t pin,uint8_t speed){(void)pin;(void)speed;}
 void UART_Init(uint8_t u,uint8_t rx,uint8_t tx,uint32_t b,uint8_t t)
 {
     assert(u==UART_1 && rx==UART1_RX_P43 && tx==UART1_TX_P44 && t==TIM1);
-    configured_baud=b;
+    configured_baud=b;ES=1;UART_BUSY[1]=0;
+}
+/** @brief 模拟原库整串发送后，最后一字节仍在移出的接口约定。 */
+void UART_PutStr(uint8_t uart,uint8_t *text)
+{
+    size_t length = strlen((char *)text);
+    assert(uart == UART_1 && EA && ES && !UART_BUSY[1]);
+    assert(length < sizeof(uart_string));
+    strcpy(uart_string, (char *)text);
+    ++uart_string_calls;
+    if (length)
+    {
+        SBUF = text[length - 1];
+        UART_BUSY[1] = 1;
+    }
 }
 void PIT_Timer_Ms(uint8_t t,uint16_t p){(void)t;(void)p;}
 
@@ -109,7 +126,7 @@ static void encoder_sampling_tests(void)
 
 int main(void)
 {
-    uint16_t values[4],count;uint8_t direction;uint32_t stamp;unsigned n;char chunk[101];
+    uint16_t values[4],count;uint8_t direction;uint32_t stamp;unsigned n;
     TrackHW_Init();assert(!(PWMA_ENO&0x55) && !(PWMB_ENO&1) && P60 && P62 && P64 && P66 && !P74);
     assert(configured_baud==115200UL && EADC && !PADC && !PADCH);
     assert(!TrackHW_EncoderSample(&count,&direction,&stamp)); /* 首次 1ms tick 前未就绪。 */
@@ -173,16 +190,23 @@ int main(void)
     assert(!TrackHW_Sample(values) && !(PWMA_ENO&0x55) && !(PWMB_ENO&1));
     assert(track_adc_overruns>=TRACK_ADC_STALE_MS);
     finish_scan();tick(1);assert(TrackHW_Sample(values));TrackHW_Arm(0);
-    assert(TrackUART_IsIdle());
-    EA=0;assert(TrackUART_IsIdle() && !EA);EA=1;
-    assert(TrackUART_Queue("abc"));assert(SBUF=='a' && !TrackUART_IsIdle());
-    TrackUART_TxISR();assert(SBUF=='b' && !TrackUART_IsIdle());
-    TrackUART_TxISR();assert(SBUF=='c' && !TrackUART_IsIdle()); /* 队列已空，末字节仍在途。 */
-    TrackUART_TxISR();assert(TrackUART_IsIdle());
-    memset(chunk,'q',100);chunk[100]=0;
-    for(n=0;n<5;n++)assert(TrackUART_Queue(chunk));
-    assert(!TrackUART_Queue(chunk) && track_tx_dropped==1);
-    for(n=0;n<501;n++)TrackUART_TxISR();assert(TrackUART_Queue("end"));
-    puts("PASS: actual hardware layer, safe PWM, 20 ms cutoff, debounce, 1ms full-frame ADC/trim/atomic publish/stale cutoff and UART backpressure");
+    /* 确认整帧转交原库、完成标志和关闭中断时拒绝发送，避免库内死等。 */
+    assert(TrackUART_IsIdle() && uart_string_calls == 0);
+    EA=0;assert(TrackUART_IsIdle() && !EA);
+    assert(!TrackUART_Send("disabled") && uart_string_calls == 0 && !EA);
+    EA=1;ES=0;
+    assert(!TrackUART_Send("disabled") && uart_string_calls == 0);
+    ES=1;
+    assert(TrackUART_Send("0,50,2500,2300\r\n"));
+    assert(uart_string_calls == 1 && !strcmp(uart_string,"0,50,2500,2300\r\n"));
+    assert(SBUF == '\n' && UART_BUSY[1] && !TrackUART_IsIdle());
+    assert(!TrackUART_Send("busy") && uart_string_calls == 1);
+    TrackUART_TxISR();
+    assert(!UART_BUSY[1] && TrackUART_IsIdle() && SBUF == '\n');
+    assert(TrackUART_Send("0,-10,1400,1500\r\n") && uart_string_calls == 2);
+    TrackUART_TxISR();
+    assert(TrackUART_IsIdle() && track_tx_dropped == 3 && EA && ES);
+    assert(TrackUART_Send("") && TrackUART_IsIdle());
+    puts("PASS: hardware safety/ADC/encoder plus original-library string send, last-byte busy completion and IRQ-off/busy rejection");
     return 0;
 }

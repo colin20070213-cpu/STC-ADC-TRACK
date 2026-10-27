@@ -139,7 +139,6 @@
 #define TRACK_STORE_SLOT_A     0x000000UL
 #define TRACK_STORE_SLOT_B     0x000200UL
 #define TRACK_STORE_PAGE_SIZE  512U
-#define TRACK_TX_SIZE          512U
 
 #if TRACK_LEFT_TRIM != TRACK_RIGHT_TRIM
 #error Single-encoder common speed control requires equal left and right trim
@@ -182,8 +181,5 @@
 #endif
 #if TRACK_ZERO_CONFIRM_MS < TRACK_PERIOD_MS || TRACK_LOST_CONFIRM_MS < TRACK_ZERO_CONFIRM_MS
 #error Invalid signal loss confirmation times
-#endif
-#if (TRACK_TX_SIZE & (TRACK_TX_SIZE - 1)) != 0
-#error UART buffer size must be a power of two
 #endif
 #endif

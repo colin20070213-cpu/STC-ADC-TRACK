@@ -20,7 +20,7 @@ extern volatile uint8_t track_guard_trip;    /**< 截止触发锁存，需重新
 extern volatile uint8_t track_key_events;    /**< 中断发布、前台取走的按键事件。 */
 extern volatile uint16_t track_adc_frames;   /**< 1ms 扫描完成整帧数，16 位自然回绕。 */
 extern volatile uint16_t track_adc_overruns; /**< 来不及在下一毫秒启动新帧的累计次数。 */
-extern volatile uint16_t track_tx_dropped;   /**< 串口队列满时丢弃的新帧累计。 */
+extern volatile uint16_t track_tx_dropped;   /**< 串口忙或中断关闭时跳过的发送请求累计。 */
 
 /** @brief 先设置安全电平，再初始化 PWM、ADC、按键、UART 和 1ms 时基。 */
 void TrackHW_Init(void);
@@ -75,10 +75,10 @@ typedef enum
 uint8_t TrackStore_Save(const TrackParams *params);
 /** @brief 查询最近一次保存的错误阶段；不会触发 EEPROM 操作。 */
 TrackStoreError TrackStore_LastError(void);
-/** @brief 队列及在途最后一字节均发送完才返回 1；只查询，不等待。 */
+/** @brief 原库 UART_BUSY[1] 为 0 时返回 1；只查询，不等待。 */
 uint8_t TrackUART_IsIdle(void);
-/** @brief 非阻塞入队完整字符串；空间不足返回 0 并累计丢帧。 */
-uint8_t TrackUART_Queue(const char *text);
-/** @brief 由 UART1 发送中断调用，最多发送一个字节。 */
+/** @brief 调用原库 UART_PutStr 发字符串；需保持中断开启，库内逐字节等待。 */
+uint8_t TrackUART_Send(const char *text);
+/** @brief 由 UART1 发送完成中断调用，清除原库 UART_BUSY[1]。 */
 void TrackUART_TxISR(void);
 #endif

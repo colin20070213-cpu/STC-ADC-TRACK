@@ -47,7 +47,7 @@ PID调参 → 速度闭环调参，三档0.01/0.10/1.00、断电保存及第四�
 
 115200/8N1，仍只发四列CSV：转向目标×1000、转向反馈×1000、速度指令、速度反馈（PWM指令刻度）。例如0,50,2500,2300，后两列可直接比较；第四列是编码器换算的实际轮速，不是最终PWM。
 
-组帧和发送入口在 USER/src/track_app.c 的 telemetry_task()，转换在 USER/src/track_speed.c 的 TrackSpeed_FeedbackCommand()，发送队列和逐字节中断在 USER/src/track_hw.c 的 TrackUART_Queue()/TrackUART_TxISR()。
+组帧和发送入口在 USER/src/track_app.c 的 telemetry_task()，转换在 USER/src/track_speed.c 的 TrackSpeed_FeedbackCommand()，原库发送封装在 USER/src/track_hw.c 的 TrackUART_Send()，内部调用 UART_PutStr(UART_1, (uint8_t *)text)。UART1完成中断调用 TrackUART_TxISR() 清零原库 UART_BUSY[1]，不再推进应用发送队列。原库忙标志声明增加volatile，原库接口和版权保留。
 
 仅运行、转向PID调参和速度PID调参模式发送；无表头、无其他列。上一帧末字节发完再生成最新帧，不排队旧数据。参数页电机关闭，所以速度目标通常显示0；调参后开始运行再观察闭环波形。
 
@@ -56,3 +56,9 @@ PID调参 → 速度闭环调参，三档0.01/0.10/1.00、断电保存及第四�
 软件回归覆盖参考系数/实际间隔换算、零误差基础PWM、欠速/超速修正、首帧即时输出、正负积分抗饱和、负载变化、堵转和停车，以及实际应用四列CSV/串口完成门控/旧EEPROM兼容。尚未烧录或完成本车系数验证。
 
 修改前完整备份：MDK/before-reference-speed-map-20261027.zip。原库和Keil原分组全部保留。
+
+## 原库串口发送（2026-10-27）
+
+调用链：telemetry_task → TrackUART_Send → UART_PutStr → UART_PutChar。没有应用发送队列；原库逐字节等待，最后字节写入后返回，由UART1完成中断清零UART_BUSY[1]。此共享标志在原库声明和定义中均加volatile，原库接口、源文件、版权和工程引用全部保留。
+
+串口忙、EA或ES关闭时发送接口直接返回，避免进入无法被中断解除的等待。实际库内整串发送会占用前台时间，控制周期仍标称2ms，中断保持响应；尚未实测蓝牙收包。测试覆盖原库接口调用、末字节忙标志释放、关中断拒绝发送及原四列CSV。修改前备份：MDK/before-library-uart-send-20261027.zip。

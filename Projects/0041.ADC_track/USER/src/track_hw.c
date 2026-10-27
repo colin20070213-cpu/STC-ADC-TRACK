@@ -1,6 +1,6 @@
 /**
  * @file    track_hw.c
- * @brief   ADC、电机/舵机 PWM、按键、时基及非阻塞串口。
+ * @brief   ADC、电机/舵机 PWM、按键、时基及原库串口发送。
  * @note    带 ISR 后缀的函数由中断调用；计算和显示由前台执行。
  */
 #include "track_hw.h"
@@ -42,10 +42,6 @@ static uint16_t adc_total;
 static uint16_t adc_minimum;
 static uint16_t adc_maximum;
 
-static volatile uint16_t tx_head;
-static volatile uint16_t tx_tail;
-static volatile uint8_t tx_active;
-static uint8_t tx_data[TRACK_TX_SIZE];
 static uint8_t key_count[5];  /**< 按下/松开的消抖计数。 */
 static uint8_t key_stable[5]; /**< 已确认的按下状态。 */
 static uint16_t key_hold[5];  /**< 长按计时；只有上下键连发。 */
@@ -508,65 +504,29 @@ void TrackHW_FeedWatchdog(void)
     WDT_CONTR |= 0x10;
 }
 
+/** @brief 查询原库发送忙标志；最后一字节发完后由 UART1 中断释放。 */
 uint8_t TrackUART_IsIdle(void)
 {
-    uint8_t idle;
-    uint8_t previous_irq = EA;
-
-    EA = 0;
-    /* 队列空时，最后一个字节仍可能正在移出，必须同时检查 tx_active。 */
-    idle = !tx_active && tx_head == tx_tail;
-    EA = previous_irq;
-    return idle;
+    return UART_BUSY[1] == 0;
 }
 
-uint8_t TrackUART_Queue(const char *text)
+/** @brief 前台使用原库 UART_PutStr 发整帧，发送期间保持中断开启。
+ *  @note 库函数逐字节等待完成，最后一个字节写入后返回；不使用应用发送队列。
+ *        中断关闭时不能调用，否则原库忙等待无法被 UART1 中断解除。
+ */
+uint8_t TrackUART_Send(const char *text)
 {
-    uint16_t head;
-    uint16_t tail;
-    uint16_t length;
-    uint16_t index;
-    uint8_t previous_irq;
-
-    length = (uint16_t)strlen(text);
-    previous_irq = EA;
-    EA = 0;
-    head = tx_head;
-    tail = tx_tail;
-    EA = previous_irq;
-    if (length >= TRACK_TX_SIZE || length > ((tail - head - 1) & (TRACK_TX_SIZE - 1)))
+    if (!EA || !ES || !TrackUART_IsIdle())
     {
         ++track_tx_dropped;
         return 0;
     }
-    for (index = 0; index < length; ++index)
-    {
-        tx_data[head] = (uint8_t)text[index];
-        head = (head + 1) & (TRACK_TX_SIZE - 1);
-    }
-    /* 数据全部写好后才发布 head，防止发送中断读到尚未填写的字节。 */
-    previous_irq = EA;
-    EA = 0;
-    tx_head = head;
-    if (!tx_active && tx_head != tx_tail)
-    {
-        tx_active = 1;
-        SBUF = tx_data[tx_tail];
-        tx_tail = (tx_tail + 1) & (TRACK_TX_SIZE - 1);
-    }
-    EA = previous_irq;
+    UART_PutStr(UART_1, (uint8_t *)text);
     return 1;
 }
 
+/** @brief UART1 发送完成时释放原库忙标志，允许 UART_PutChar 发送下一字节。 */
 void TrackUART_TxISR(void)
 {
-    if (tx_tail != tx_head)
-    {
-        SBUF = tx_data[tx_tail];
-        tx_tail = (tx_tail + 1) & (TRACK_TX_SIZE - 1);
-    }
-    else
-    {
-        tx_active = 0;
-    }
+    UART_BUSY[1] = 0;
 }

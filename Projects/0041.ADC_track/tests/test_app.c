@@ -56,7 +56,7 @@ uint8_t TrackStore_Load(TrackParams *p) { if(flash_valid){*p=flash_params;return
 uint8_t TrackStore_Save(const TrackParams *p) { ++store_calls;if(store_fails)return 0;flash_params=*p;flash_valid=1;return 1; }
 TrackStoreError TrackStore_LastError(void) { return store_fails ? TRACK_STORE_ERASE : TRACK_STORE_OK; }
 uint8_t TrackUART_IsIdle(void) { return !uart_busy; }
-uint8_t TrackUART_Queue(const char *s) { assert(!uart_busy);assert(strlen(s)<sizeof(uart_line));strcpy(uart_line,s);++uart_calls;uart_busy=1;return 1; }
+uint8_t TrackUART_Send(const char *s) { assert(!uart_busy);assert(strlen(s)<sizeof(uart_line));strcpy(uart_line,s);++uart_calls;uart_busy=1;return 1; }
 void Ms_Delay(uint16_t ms) { track_milliseconds+=ms; }
 void LCD_Set_Pos(uint8_t x,uint8_t y) { ++oled_positions;oled_address=(uint16_t)y*128+x; }
 void LCD_WrDat(uint8_t v) { ++oled_data_bytes;assert(oled_address<1024);oled_ram[oled_address++]=v; }

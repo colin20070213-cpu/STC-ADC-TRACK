@@ -42,7 +42,7 @@ void TM0_Isr(void) interrupt 1
     TF0 = 0;
     TrackHW_TickISR();
 }
-/** @brief 串口发送队列推进；接收字节只读走，不接受远程控制。 */
+/** @brief 发送完成释放原库 UART_BUSY[1]；接收字节只读走，不接受远程控制。 */
 void UART1_Isr(void) interrupt 4
 {
     unsigned char ignored;

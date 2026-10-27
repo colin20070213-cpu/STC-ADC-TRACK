@@ -19,7 +19,7 @@
 #include "CNU_PIE_UART.h"
 
 int uart_receive[4];
-uint8_t UART_BUSY[5];				                  //串口接收忙标志位
+volatile uint8_t UART_BUSY[5];             //发送忙标志：前台置位，串口中断清零。
 uint8_t uart1_tx_buff[UART1_TX_BUFFER_SIZE];	//发送缓冲
 uint8_t uart1_rx_buff[UART1_RX_BUFFER_SIZE];	//接收缓冲
 

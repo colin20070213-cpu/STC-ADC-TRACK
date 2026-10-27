@@ -79,7 +79,7 @@ typedef enum
 
 extern uint8_t uart1_tx_buff[UART1_TX_BUFFER_SIZE];	//发送缓冲
 extern uint8_t uart1_rx_buff[UART1_RX_BUFFER_SIZE];	//接收缓冲
-extern uint8_t UART_BUSY[5];
+extern volatile uint8_t UART_BUSY[5];
 
 void UART_Init(UARTN_Enum UART_N, UART_PIN_Enum UART_Rx_Pin, UART_PIN_Enum UART_Tx_Pin, uint32_t BaudRate , TIMER_CHN_Enum Timer_CHN);
 void UART_PutChar(UARTN_Enum UART_N,uint8_t data_t);
