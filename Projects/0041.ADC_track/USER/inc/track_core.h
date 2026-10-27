@@ -70,8 +70,8 @@ typedef struct
     uint16_t center;     /**< 舵机机械中值，1 单位=2us 脉宽，与载波频率解耦。 */
     uint16_t left;       /**< 舵机物理左限位，与运行时方向配合使用。 */
     uint16_t right;      /**< 舵机物理右限位。 */
-    uint16_t base_speed_pps;  /**< 唯一基础速度目标，脉冲/秒；沿用旧记录 offset20 的数值。 */
-    uint16_t curve_speed_pps; /**< 弯道速度目标，脉冲/秒，不得大于 BASE。 */
+    uint16_t base_command;  /**< 基础 PWM 刻度指令；沿用旧记录 offset20 的数值。 */
+    uint16_t curve_command; /**< 弯道 PWM 刻度指令，不得大于 BASE。 */
     uint16_t lost_sum;   /**< 左右有效强度之和的失线阈值（每侧取横/纵较强值）。 */
     int16_t servo_left_sign; /**< +1=占空比增大向左，-1=占空比减小向左。 */
     uint8_t left_reverse;    /**< 逻辑左电机反向开关，0=正向，1=反向。 */

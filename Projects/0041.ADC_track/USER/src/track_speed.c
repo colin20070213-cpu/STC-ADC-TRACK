@@ -1,5 +1,5 @@
 /** @file track_speed.c
- *  @brief 单编码器速度闭环：测量滤波、即时目标、微分滤波、抗饱和、堵转保护。
+ *  @brief 单编码器速度闭环：参考系数换算、基础 PWM 前馈、PID 修正、抗饱和及堵转保护。
  */
 #include "track_speed.h"
 
@@ -12,6 +12,7 @@ static float speed_clamp(float value, float low, float high)
 
 void TrackSpeed_Stop(TrackSpeedState *state)
 {
+    state->command = 0;
     state->target = 0;
     state->integral = 0;
     state->derivative = 0;
@@ -53,7 +54,7 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
     float unconstrained;
     float output;
 
-    if (!TrackParams_Valid(params) || requested > TRACK_SPEED_COMMAND_MAX_PPS || pwm_limit > TRACK_DUTY_MAX)
+    if (!TrackParams_Valid(params) || requested > TRACK_SPEED_COMMAND_MAX || pwm_limit > TRACK_DUTY_MAX)
     {
         TrackSpeed_Stop(state);
         return TRACK_BAD_PARAMS;
@@ -69,7 +70,9 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
         return TRACK_OK;
     }
     dt = elapsed_ms / 1000.0f;
-    state->target = requested / 100.0f; /* 脉冲/秒 → 内部计数/10ms；不叠加慢爬升。 */
+    state->command = requested;
+    /* 参考式是 20ms 计数 = 指令 * 0.104；内部 10ms 标度折算为指令 * 0.052。 */
+    state->target = requested * TRACK_ENCODER_COUNTS_PER_COMMAND_10MS;
     error = state->target - state->feedback;
     if (!state->initialized)
     {
@@ -82,10 +85,11 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
     state->last_feedback = state->feedback;
     state->p_term = params->speed_kp100 * 0.01f * error;
     state->d_term = params->speed_kd100 * 0.01f * state->derivative;
-    state->integral = speed_clamp(state->integral, 0, (float)pwm_limit);
+    state->integral = speed_clamp(state->integral, -(float)pwm_limit, (float)pwm_limit);
     candidate_integral = speed_clamp(state->integral + params->speed_ki100 * 0.01f * error * dt,
-                                     0, (float)pwm_limit);
-    unconstrained = state->p_term + candidate_integral + state->d_term;
+                                     -(float)pwm_limit, (float)pwm_limit);
+    /* 指令提供基础动力；PID 只补偿误差，积分允许为负以减小过剩动力。 */
+    unconstrained = requested + state->p_term + candidate_integral + state->d_term;
     output = speed_clamp(unconstrained, 0, (float)pwm_limit);
     /* 只保留 PWM 绝对限幅与抗积分饱和，输出不受额外加速斜率限制。 */
     if (output == unconstrained || (unconstrained > output && error < 0) ||
@@ -95,7 +99,7 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
     }
     else
     {
-        output = speed_clamp(state->p_term + state->integral + state->d_term, 0, (float)pwm_limit);
+        output = speed_clamp(requested + state->p_term + state->integral + state->d_term, 0, (float)pwm_limit);
     }
     state->saturated = output != unconstrained;
     state->output = (uint16_t)output;
@@ -115,6 +119,12 @@ TrackFault TrackSpeed_Calculate(TrackSpeedState *state, const TrackParams *param
     return TRACK_OK;
 }
 
+/** @brief 将滤波轮速反算为 PWM 指令刻度；不裁到 4000，保留真实超速反馈。 */
+uint32_t TrackSpeed_FeedbackCommand(const TrackSpeedState *state)
+{
+    return (uint32_t)(state->feedback / TRACK_ENCODER_COUNTS_PER_COMMAND_10MS + 0.5f);
+}
+
 static uint16_t speed_interpolate(uint16_t straight, uint16_t curve, int16_t error, uint8_t crossing)
 {
     uint16_t magnitude = error < 0 ? (uint16_t)(-(int32_t)error) : (uint16_t)error;
@@ -124,5 +134,5 @@ static uint16_t speed_interpolate(uint16_t straight, uint16_t curve, int16_t err
 
 uint16_t TrackSpeed_Target(const TrackParams *params, int16_t error, uint8_t crossing)
 {
-    return speed_interpolate(params->base_speed_pps, params->curve_speed_pps, error, crossing);
+    return speed_interpolate(params->base_command, params->curve_command, error, crossing);
 }

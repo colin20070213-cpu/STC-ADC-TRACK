@@ -266,7 +266,7 @@ static void loss_confirmation_tests(void)
         {TRACK_HARD_LOST_EACH-1,TRACK_HARD_LOST_EACH-1,120},
         {TRACK_HARD_LOST_EACH,TRACK_HARD_LOST_EACH,250},{0,19,250}};
 
-    TrackParams_Default(&params);params.base_speed_pps=4000;params.curve_speed_pps=1000;
+    TrackParams_Default(&params);params.base_command=4000;params.curve_command=1000;
     params.lost_sum=150; /* 此用例固定总强度，分别验证弱信号和双路近零。 */
     assert(TrackParams_Valid(&params));
     memset(&sensors,0,sizeof(sensors));sensors.valid=1;
@@ -308,7 +308,7 @@ static void loss_confirmation_tests(void)
     sensors.norm[0]=sensors.norm[1]=500;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK && !control.weak_ms && !control.zero_ms);
     TrackControl_Reset(&control,&params);sensors.norm[0]=sensors.norm[1]=0;
-    params.curve_speed_pps=300;
+    params.curve_command=300;
     control.left_motor=200;control.right_motor=400;
     assert(TrackControl_Step(&control,&sensors,&params,1)==TRACK_OK);
     assert(control.left_motor==200 && control.right_motor==400);
@@ -340,8 +340,8 @@ static void store_tests(void)
     p=q;p.kp100=4200;assert(TrackStore_Save(&p));
     assert(TrackStore_Load(&q) && q.kp100==4200);
     /* 回归：失线阈值 40 和动力 4000 必须能一起写入、重读且再次保存免擦写。 */
-    p.base_speed_pps=4000;p.curve_speed_pps=3000;p.lost_sum=40;assert(TrackStore_Save(&p));
-    assert(TrackStore_Load(&q) && q.base_speed_pps==4000 && q.curve_speed_pps==3000 && q.lost_sum==40);
+    p.base_command=4000;p.curve_command=3000;p.lost_sum=40;assert(TrackStore_Save(&p));
+    assert(TrackStore_Load(&q) && q.base_command==4000 && q.curve_command==3000 && q.lost_sum==40);
     mutations=0;fail_after=0;
     assert(TrackStore_Save(&q) && mutations==0);
     fail_after=-1;
@@ -409,9 +409,15 @@ static void c4_store_tests(void)
            q.speed_kp100==100000UL && q.speed_ki100==250000UL && q.speed_kd100==500000UL);
     mutations=0;fail_after=0;assert(TrackStore_Save(&q) && mutations==0);fail_after=-1;
     memcpy(saved,flash_memory,sizeof(saved));
+    assert(!memcmp(flash_memory+512+64,"PWM1",4));
+    /* PPS1 版本按用户要求保留原数字，不能清除 PID、方向、舵机或 C4。 */
+    memcpy(flash_memory+512+64,"PPS1",4);
+    fixture_u16(flash_memory+512+76,TrackCRC16(flash_memory+512+32,44));
+    assert(TrackStore_Load(&q) && q.base_command==p.base_command && q.curve_command==p.curve_command &&
+           q.speed_kp100==100000UL && q.center==p.center && q.left_reverse==p.left_reverse && q.c4_b==654);
     memset(flash_memory+512+64,0xff,12);
     fixture_u16(flash_memory+512+76,TrackCRC16(flash_memory+512+32,44));
-    assert(TrackStore_Load(&q) && q.base_speed_pps==TRACK_BASE_SPEED_PPS && q.curve_speed_pps==TRACK_CURVE_SPEED_PPS && q.speed_kp100==100000UL);
+    assert(TrackStore_Load(&q) && q.base_command==TRACK_BASE_COMMAND && q.curve_command==TRACK_CURVE_COMMAND && q.speed_kp100==100000UL);
     for(cut=0;cut<(int)TRACK_STORE_RECORD_BYTES+1;cut++)
     {
         memcpy(flash_memory,saved,sizeof(saved));assert(TrackStore_Load(&p));

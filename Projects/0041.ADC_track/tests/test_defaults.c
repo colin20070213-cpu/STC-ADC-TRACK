@@ -61,7 +61,7 @@ int main(void)
     assert(TrackStore_Load(&params));
     assert(params.kp100 == 6000 && params.ki100 == 25 && params.kd100 == 30);
     assert(params.center == 751 && params.left == 805 && params.right == 695);
-    assert(params.base_speed_pps == 1400 && params.curve_speed_pps == 650 && params.lost_sum == 175);
+    assert(params.base_command == 1400 && params.curve_command == 650 && params.lost_sum == 175);
     assert(!write_count);
     /* 旧记录升级到含方向的 v2 时，逐点断电也必须恢复旧参数。 */
     memcpy(legacy_flash,flash_memory,sizeof(legacy_flash));
@@ -91,11 +91,11 @@ int main(void)
     TrackParams_RestorePID(&restored);
     assert(restored.kp100 == 5275 && restored.ki100 == 5 && restored.kd100 == 32);
     assert(restored.center == params.center && restored.left == params.left && restored.right == params.right);
-    assert(restored.base_speed_pps == params.base_speed_pps && restored.curve_speed_pps == params.curve_speed_pps && restored.lost_sum == params.lost_sum);
+    assert(restored.base_command == params.base_command && restored.curve_command == params.curve_command && restored.lost_sum == params.lost_sum);
     assert(TrackStore_Load(&params) && params.kp100 == 6000); /* 预览尚未保存。 */
     assert(TrackStore_Save(&restored));
     assert(TrackStore_Load(&params) && params.kp100 == 5275 && params.center == 751);
-    assert(params.base_speed_pps == 1400 && params.curve_speed_pps == 650);
+    assert(params.base_command == 1400 && params.curve_command == 650);
     assert(params.servo_left_sign==1 && !params.left_reverse && !params.right_reverse);
     assert(TrackParams_SetServoDirection(&params,-1));
     params.left_reverse=1;params.right_reverse=1;

@@ -43,7 +43,7 @@
  * 这些是待实车整定的起点，独立于舵机 PID 的 Kp/Ki/Kd。 */
 #define TRACK_FOUR_WEIGHT_MAX      1000U /* A:0.01~10.00，B/C:0.00~10.00。 */
 #define TRACK_FOUR_WEIGHT_A        100U
-#define TRACK_FOUR_WEIGHT_B        100U
+#define TRACK_FOUR_WEIGHT_B        150U
 #define TRACK_FOUR_WEIGHT_C        100U
 #define TRACK_FOUR_SCALE1000       1000U
 #define TRACK_FOUR_DEN_MIN         10U /* 分母折算为 A=1 时的最低归一化强度。 */
@@ -76,22 +76,29 @@
 /* 默认舵机方向；运行时可在“舵机设置”更改并保存，Flash 优先。 */
 #define TRACK_SERVO_LEFT_SIGN  1
 #define TRACK_ERROR_SIGN       1     /* 电感误差方向，仅允许 +1/-1。 */
-/* 电机：BASE/CURVE 为唯一速度目标；TRACK_DUTY_MAX 独立限制实际 PWM。 */
+/* 电机：BASE/CURVE 为 PWM 刻度指令，同时提供基础动力和换算后的目标速度。 */
 #define TRACK_MOTOR_FREQUENCY  10000UL /* 电机 PWM 频率，单位 Hz。 */
 #define TRACK_MOTOR_SWAP       0      /* 两组电机对调：0=否，1=是。 */
 #define TRACK_LEFT_REVERSE     0      /* 默认逻辑左电机方向，菜单可覆盖并保存。 */
 #define TRACK_RIGHT_REVERSE    0      /* 默认逻辑右电机方向，菜单可覆盖并保存。 */
-#define TRACK_BASE_SPEED_PPS   2500U /* 唯一 BASE 目标，单位脉冲/秒；沿用原动力参数的数字。 */
-#define TRACK_CURVE_SPEED_PPS  1400U /* 唯一 CURVE 目标，单位脉冲/秒。 */
+#define TRACK_BASE_COMMAND   2500U /* 直道指令/基础 PWM，2500 对应 25% 占空比。 */
+#define TRACK_CURVE_COMMAND  1400U /* 弯道指令/基础 PWM，1400 对应 14% 占空比。 */
 #define TRACK_DUTY_MAX         4000U /* 速度 PID 的统一 PWM 绝对上限，40%。 */
-#define TRACK_SPEED_COMMAND_MAX_PPS 4000U /* 菜单目标上限，单位脉冲/秒，与 PWM 单位独立。 */
-#define TRACK_SPEED_FINE_STEP  10U  /* 速度页精调：10 脉冲/秒。 */
-#define TRACK_SPEED_COARSE_STEP 100U /* 速度页粗调：100 脉冲/秒。 */
+#define TRACK_SPEED_COMMAND_MAX 4000U /* PWM 刻度的指令上限；实际输出另由 TRACK_DUTY_MAX 限制。 */
+#define TRACK_SPEED_FINE_STEP  10U  /* 指令精调：10 个 PWM 单位。 */
+#define TRACK_SPEED_COARSE_STEP 100U /* 指令粗调：100 个 PWM 单位。 */
 #define TRACK_LEFT_TRIM        0     /* 左轮开环动力补偿，可正可负。 */
 #define TRACK_RIGHT_TRIM       0     /* 右轮开环动力补偿，可正可负。 */
-/* 唯一一组 BASE/CURVE 输入按脉冲/秒作为速度目标，PWM 由速度 PID 计算。
- * 内部速度计算保留计数/10ms，输入除以 100、遥测乘以 100 即得到脉冲/秒。
- * 不再叠加目标爬升或 PWM 增速限制；以下 LEGACY 字段仅兼容旧 EEPROM。 */
+/* 参考程序关系：20ms 编码器计数 = PWM 指令 * 0.104。
+ * 内部仍使用计数/10ms，因此目标 = 指令 * 0.052；2ms 原始计数不能直接套 0.104。
+ * 最终 PWM = 指令 + PID 修正，屏幕/串口将反馈反算回相同的 PWM 指令刻度。
+ * 系数来自用户上次提供的参考程序，尚未在本车实测；PID 宏及已有保存参数不自动重置。
+ * 不叠加目标爬升或 PWM 增速限制；以下 LEGACY 字段仅兼容旧 EEPROM。 */
+#define TRACK_ENCODER_REFERENCE_GAIN_X1000 104U /* 参考系数 0.104；修改此宏可校准本车。 */
+#define TRACK_ENCODER_REFERENCE_PERIOD_MS  20U  /* 上述参考系数对应的计数时间窗。 */
+#define TRACK_ENCODER_COUNTS_PER_COMMAND_10MS \
+    ((float)TRACK_ENCODER_REFERENCE_GAIN_X1000 * 10.0f / \
+     (1000.0f * TRACK_ENCODER_REFERENCE_PERIOD_MS))
 #define TRACK_ENCODER_SAMPLE_MS     1U  /* TIM0 保存原始计数快照，不等待脉冲。 */
 #define TRACK_ENCODER_STALE_MS      2U  /* 前台拒绝超期的计数快照。 */
 #define TRACK_SPEED_PERIOD_MS       2U  /* 速度闭环每两个编码器快照更新。 */
@@ -99,7 +106,7 @@
 #define TRACK_LEGACY_SPEED_CURVE_DEFAULT   0U
 #define TRACK_LEGACY_SPEED_TARGET_MAX      1000U
 #ifndef TRACK_SPEED_DEFAULT_KP
-#define TRACK_SPEED_DEFAULT_KP      500.00f
+#define TRACK_SPEED_DEFAULT_KP      50.00f
 #endif
 #ifndef TRACK_SPEED_DEFAULT_KI
 #define TRACK_SPEED_DEFAULT_KI      0.00f
@@ -136,6 +143,9 @@
 
 #if TRACK_LEFT_TRIM != TRACK_RIGHT_TRIM
 #error Single-encoder common speed control requires equal left and right trim
+#endif
+#if TRACK_ENCODER_REFERENCE_GAIN_X1000 < 1 || TRACK_ENCODER_REFERENCE_GAIN_X1000 > 10000 || TRACK_ENCODER_REFERENCE_PERIOD_MS < 1 || TRACK_ENCODER_REFERENCE_PERIOD_MS > 1000
+#error Invalid encoder PWM conversion reference
 #endif
 #if TRACK_ENCODER_SAMPLE_MS != 1 || TRACK_SPEED_PERIOD_MS % TRACK_ENCODER_SAMPLE_MS != 0
 #error Encoder snapshots require the 1ms tick and an integer speed period multiple

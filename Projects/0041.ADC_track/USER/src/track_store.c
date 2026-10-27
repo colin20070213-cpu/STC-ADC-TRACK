@@ -130,7 +130,7 @@ static void encode_store_record(uint8_t *record, const TrackParams *params, uint
     store_u16(record + 58, params->c4_a);
     store_u16(record + 60, params->c4_b);
     store_u16(record + 62, params->c4_c);
-    memcpy(record + 64, "PPS1", 4); /* offset20/22 已统一为脉冲/秒目标，保留原数值。 */
+    memcpy(record + 64, "PWM1", 4); /* offset20/22 为 PWM 刻度指令，保留原数字。 */
     store_u16(record + 76, TrackCRC16(record + 32, 44));
     record[79] = 0x5a;
 }
@@ -185,9 +185,9 @@ static uint8_t decode_store_record(const uint8_t *record, TrackParams *params, u
         {
             if (memcmp(record + 36, record + 4, 4) || memcmp(record + 56, record + 28, 2) ||
                 record[79] != 0x5a || load_u16(record + 76) != TrackCRC16(record + 32, 44)) return 0;
-            if (memcmp(record + 64, "PPS1", 4))
+            if (memcmp(record + 64, "PWM1", 4) && memcmp(record + 64, "PPS1", 4))
             {
-                /* 无标记的旧 SPD2 保留原 BASE/CURVE 数字；未知单位标记不能误读。 */
+                /* 按用户要求沿用旧 PPS1/无标记记录的数字；未知标记仍拒绝。 */
                 for (index = 64; index < 76; ++index)
                 {
                     if (record[index] != 0xff) return 0;

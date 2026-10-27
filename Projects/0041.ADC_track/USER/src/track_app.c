@@ -461,7 +461,7 @@ static void render_pid(void)
     }
     if (mode == TRACK_SPEED_PID)
     {
-        sprintf(text_line, "V:%lu/s MOTOR OFF", (unsigned long)(speed_control.feedback * 100.0f + 0.5f));
+        sprintf(text_line, "V:%lu MOTOR OFF", (unsigned long)TrackSpeed_FeedbackCommand(&speed_control));
         text_at(0, 2, encoder_ok ? text_line : "ENC ERROR / MOTOR OFF");
     }
     else text_at(0, 2, sensors.valid ?
@@ -479,7 +479,7 @@ static void render_pid(void)
         text_at(0, (uint8_t)(item + 3), text_line);
     }
     if (mode == TRACK_SPEED_PID)
-        sprintf(text_line, "TARGET:%u PWM:%u%s", params.base_speed_pps, speed_control.output, params_dirty() ? " *" : "");
+        sprintf(text_line, "TARGET:%u PWM:%u%s", params.base_command, speed_control.output, params_dirty() ? " *" : "");
     else sprintf(text_line, "E:%d S:%u%s%s", control.error, control.servo,
             control.saturated ? " LIM" : "", params_dirty() ? " *" : "");
     text_at(0, 6, text_line);
@@ -520,16 +520,16 @@ static void render_c4(void)
             (editing ? "OK:save <:undo >:step" : "^v:pick >:edit <:back")));
 }
 
-/** @brief 唯一速度目标页：沿用原 BASE/CURVE 数字，明确以脉冲/秒显示。 */
+/** @brief 唯一指令页：BASE/CURVE 和实测反馈均使用 PWM 指令刻度。 */
 static void render_speed(void)
 {
     sprintf(text_line, "PWM<=%u", (unsigned int)TRACK_DUTY_MAX);
     text_at(70, 1, text_line);
-    sprintf(text_line, "%cBASE:%4u pps", speed_item == 0 ? '>' : ' ', params.base_speed_pps);
+    sprintf(text_line, "%cBASE:%4u PWM", speed_item == 0 ? '>' : ' ', params.base_command);
     text_at(0, 2, text_line);
-    sprintf(text_line, "%cCURVE:%4u pps", speed_item == 1 ? '>' : ' ', params.curve_speed_pps);
+    sprintf(text_line, "%cCURVE:%4u PWM", speed_item == 1 ? '>' : ' ', params.curve_command);
     text_at(0, 3, text_line);
-    sprintf(text_line, "NOW:%lu pps", (unsigned long)(speed_control.feedback * 100.0f + 0.5f));
+    sprintf(text_line, "NOW:%lu PWM", (unsigned long)TrackSpeed_FeedbackCommand(&speed_control));
     text_at(0, 4, text_line);
     sprintf(text_line, "STEP:%u OFF%s", coarse_step ?
             (unsigned int)TRACK_SPEED_COARSE_STEP : (unsigned int)TRACK_SPEED_FINE_STEP,
@@ -810,7 +810,7 @@ static void enter_menu_item(void)
                 fault = TRACK_BAD_PARAMS;
                 break;
             }
-            if (params.base_speed_pps == 0)
+            if (params.base_command == 0)
             {
                 fault = TRACK_NO_SPEED;
                 break;
@@ -897,7 +897,7 @@ static void adjust_param(int8_t direction)
     }
     else if (mode == TRACK_SPEED || mode == TRACK_SPEED_TARGET)
     {
-        selected_value = speed_item == 0 ? &candidate.base_speed_pps : &candidate.curve_speed_pps;
+        selected_value = speed_item == 0 ? &candidate.base_command : &candidate.curve_command;
         step = coarse_step ? TRACK_SPEED_COARSE_STEP : TRACK_SPEED_FINE_STEP;
     }
     else
@@ -1436,7 +1436,7 @@ static void control_task(void)
             }
             else
             {
-                uint16_t limit = TRACK_DUTY_MAX; /* BASE/CURVE 现在只表示目标速度，PWM 统一限幅。 */
+                uint16_t limit = TRACK_DUTY_MAX; /* 基础 PWM 加速度修正后，仍由统一上限限制实际动力。 */
                 if (encoder_fresh)
                 {
                     result = TrackSpeed_Calculate(&speed_control, &params,
@@ -1466,7 +1466,7 @@ static void control_task(void)
 }
 
 /** @brief 只发送两组 PID 的目标和反馈四列；115200/8N1，串口空闲即发最新值。
- *  @note 顺序：转向目标×1000、转向反馈×1000、速度目标pps、速度反馈pps。
+ *  @note 顺序：转向目标×1000、转向反馈×1000、速度指令、换算到相同 PWM 刻度的速度反馈。
  *        不发送表头或诊断列；只允许一帧在途，避免高频发送积压旧数据。
  */
 static void telemetry_task(uint32_t now)
@@ -1481,8 +1481,8 @@ static void telemetry_task(uint32_t now)
 #endif
     sprintf(telemetry, "%d,%d,%ld,%ld\r\n",
             (int)TRACK_STEERING_TARGET1000, TrackSensors_Feedback(&sensors, &params),
-            (long)(speed_control.target * 100.0f),
-            (long)(speed_control.feedback * 100.0f));
+            (long)speed_control.command,
+            (long)TrackSpeed_FeedbackCommand(&speed_control));
     if (TrackUART_Queue(telemetry)) last_telemetry = now;
 }
 

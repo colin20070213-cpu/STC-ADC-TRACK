@@ -49,7 +49,7 @@ PID 输出为相对机械中值的偏移。核心层根据左右限位换算偏�
 原始小信号仍映射到 0～1000；`ratio_per_mille()` 用十轮商余递推计算归一化千分比，四路误差用 `four_sensor_terms()` 构造论文分子分母，再由 `divide_capped1000()` 做有界长除并恢复符号，`center_average()` 显式求有符号均值，避免这些路径依赖目标芯片的 32 位乘除库。
 `TrackSensors_MathCheck()` 在实际固件上电时执行；失败置 `TRACK_MATH_ERROR`，不能进入依赖电感计算的执行模式。不要通过把 E 固定为零或强行删除数学库来掩盖错误。
 保留本车已有符号约定：普通循迹时 PID 误差为“反馈减目标”，最终乘舵机方向。十字策略处理后的误差保存在 `control.error`，原始位置反馈可独立读取。
-蓝牙 CSV 仅四列：转向目标×1000、转向反馈×1000、速度目标pps、速度反馈pps；无表头和参数快照。UART 为 115200 / 8N1，运行及两种 PID 调参时按串口空闲状态尽快发送；其他页面不发送。`telemetry_task()` 先查询 `TrackUART_IsIdle()`，上一帧末字节完成后才读取最新控制目标与反馈并入队。`TRACK_TELEMETRY_MS=0` 取消定时等待，始终不积压旧遥测；非零时作为最小帧间隔。
+蓝牙 CSV 仅四列：转向目标×1000、转向反馈×1000、速度指令、换算到相同PWM刻度的速度反馈；无表头和参数快照。UART 为 115200 / 8N1，运行及两种 PID 调参时按串口空闲状态尽快发送；其他页面不发送。`telemetry_task()` 先查询 `TrackUART_IsIdle()`，上一帧末字节完成后才读取最新控制目标与反馈并入队。`TRACK_TELEMETRY_MS=0` 取消定时等待，始终不积压旧遥测；非零时作为最小帧间隔。
 
 ## 自己在代码里调 PID
 
@@ -64,9 +64,9 @@ PID 输出为相对机械中值的偏移。核心层根据左右限位换算偏�
 
 ## 自己修改速度
 
-只在“电机设置 → 速度设定”修改唯一 BASE/CURVE，单位脉冲/秒。默认宏为 `TRACK_BASE_SPEED_PPS=2500`、`TRACK_CURVE_SPEED_PPS=1400`；`TrackParams.base_speed_pps/curve_speed_pps` 从旧记录offset20/22保留原数字。范围0≤CURVE≤BASE≤TRACK_SPEED_COMMAND_MAX_PPS（4000），编辑步长10/100。
+只在“电机设置 → 速度设定”修改唯一 BASE/CURVE，单位为PWM指令刻度。默认宏为 `TRACK_BASE_COMMAND=2500`、`TRACK_CURVE_COMMAND=1400`；`TrackParams.base_command/curve_command` 从旧记录offset20/22保留原数字。范围0≤CURVE≤BASE≤TRACK_SPEED_COMMAND_MAX（4000），编辑步长10/100。
 
-`TrackSpeed_Target()` 根据偏差/十字状态插值pps目标；`TrackSpeed_Calculate()` 将目标除以100进入原计数/10ms标度，保留现有PID增益含义，直接计算共同PWM，仅限幅0～TRACK_DUTY_MAX（4000）。目标与PWM都没有额外爬升。菜单删除原额外速度设置，`legacy_speed_base/legacy_speed_curve`仅为EEPROM兼容，不能用于发车条件或计算目标。
+`TrackSpeed_Target()` 根据偏差/十字状态插值PWM指令；`TrackSpeed_Calculate()` 按0.104/20ms换算为内部计数/10ms目标（乘0.052），误差与实测计数相减，输出为基础指令加PID修正，限幅0～TRACK_DUTY_MAX（4000）。`TrackSpeed_FeedbackCommand()` 将反馈除以0.052反算到相同PWM指令刻度，用于屏幕/串口。目标与PWM都没有额外爬升。菜单删除原额外速度设置，`legacy_speed_base/legacy_speed_curve`仅为EEPROM兼容，不能用于发车条件或计算目标。
 
 ## 修改失线容错
 
@@ -104,7 +104,7 @@ PID 输出为相对机械中值的偏移。核心层根据左右限位换算偏�
 
 ## 哪些数据会掉电保留
 
-转向 PID、速度 PID、速度目标、舵机三值、三个方向、唯一基础/弯道pps目标和失线阈值保存在同一条参数记录中。记录明确指定各字段的字节位置，没有直接把 C 结构体内存写入 Flash。
+转向 PID、速度 PID、速度目标、舵机三值、三个方向、唯一基础/弯道PWM指令和失线阈值保存在同一条参数记录中。记录明确指定各字段的字节位置，没有直接把 C 结构体内存写入 Flash。
 
 电感极值、居中参考、积分和微分历史只在 RAM 中。重新提交电感量程后，必须重新居中标定。
 
@@ -139,7 +139,7 @@ STC-ISP 需设置至少 1KB 用户 EEPROM，当前程序布局下不超过 64KB�
 
 独立算法与状态在 `track_speed.h/.c`，不复用写死转向 dt 的 PID。TIM0 每 1ms 通过原 Encoder 库稳定快照并附加采集时刻；`encoder_task()` 每 2ms 原子复制最近快照，按快照时刻差换算速度；转向控制后在有效信号时执行速度 PID，并将同一个输出写入两轮。弱信号、停车、故障清积分；旧转向参数保持独立。
 
-保存仍用原槽位，基础 32B 记录后扩展 48B SPD2（含速度与 C4），原第 31 字节提交标记最后写，保证基础与扩展原子一致；旧 v1/v2 的原动力数字沿用为唯一pps目标，旧独立目标初值0不参与控制。当前记录格式及所有 81 个擦写断点均有回归。新增应用模块仍位于 application，原库和所有旧引用保留。
+保存仍用原槽位，基础 32B 记录后扩展 48B SPD2（含速度与 C4），原第 31 字节提交标记最后写，保证基础与扩展原子一致；旧 v1/v2 的原动力数字沿用为唯一PWM刻度指令，旧独立目标初值0不参与控制。当前记录格式及所有 81 个擦写断点均有回归。新增应用模块仍位于 application，原库和所有旧引用保留。
 
 `TrackHW_EncoderSample()` 在短暂关中断期间复制计数、P52 电平和采集时刻；采集错误锁存至前台读取，即使下一毫秒采集成功也不能掩盖。快照超过 2ms、测速间隔超过 4ms 或异常计数时禁止运行。采集函数仅从 TIM0 调用，防止 C251 非重入函数同时用于前台和中断。轮速和微分滤波按实际 dt 与时间常数计算，改变控制周期时不直接复用旧固定系数。主菜单 PID 调参进入 `MENU_PID=4`，其下选择转向或速度闭环；子页左键返回该层并保留光标。
 
@@ -151,4 +151,4 @@ STC-ISP 需设置至少 1KB 用户 EEPROM，当前程序布局下不超过 64KB�
 
 C4 页面复用选择/编辑/撤销按键流程，单独绘制 A/B/C。成功保存后比较入页参数；若权重改变，调用 `TrackBodyCenter_Invalidate()`，只清居中参考及采集历史，保留各路极值。保存失败及撤销均保留旧居中参考。SPD2 总长为 80B，C4 字段受同一扩展 CRC 保护，仍最后写基础提交标记；所有 81 个写入中断点及旧 SPD1 迁移有回归。
 
-SPD2扩展64～67写PPS1单位标记；无标记旧SPD2以及旧SPD1仍保留offset20/22原数值作为pps目标，40/42旧独立目标不参与控制。已删除 TrackSpeed_Limit() 及目标/PWM爬升宏；弱信号PWM上限只使用TRACK_LOST_DUTY_MAX，不与CURVE速度单位混用。
+SPD2扩展64～67写PWM1单位标记；旧PPS1、无标记SPD2以及旧SPD1仍保留offset20/22原数值作为PWM刻度指令，40/42旧独立目标不参与控制。已删除 TrackSpeed_Limit() 及目标/PWM爬升宏；弱信号PWM上限只使用TRACK_LOST_DUTY_MAX，不把CURVE指令当作实际PWM上限。
